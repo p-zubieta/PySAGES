@@ -74,7 +74,7 @@ class SamplingMethod(ABC):
             self.context.run(timesteps, **kwargs)
 
     @dispatch
-    def run(self, timesteps: int):
+    def run(self, timesteps: int, **kwargs):
         if "context" not in self.__dict__:
             raise ValueError(
                 "When running for the first time, a function for generating "
@@ -82,7 +82,7 @@ class SamplingMethod(ABC):
             )
 
         with self.context:
-            self.context.run(timesteps)
+            self.context.run(timesteps, **kwargs)
 
 
 class GriddedSamplingMethod(SamplingMethod):

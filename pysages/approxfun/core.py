@@ -103,8 +103,11 @@ def compute_mesh(grid: Grid):
     Returns a dense mesh with the same shape as `grid`, but on the hypercube
     [-1, 1]ⁿ, where `n` is the dimensionality of `grid`.
     """
-    h = 2 / grid.shape
-    o = -1 + h / 2
+    L = 2  # if scale else grid.size
+    lo = -1  # if scale else grid.lower
+
+    h = L / grid.shape
+    o = lo + h / 2
 
     nodes = o + h * np.hstack(
         [np.arange(i).reshape(-1, 1) for i in grid.shape]

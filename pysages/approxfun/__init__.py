@@ -5,6 +5,7 @@
 # pylint: disable=unused-import,relative-beyond-top-level
 
 from .core import (
+    Fun,
     SpectralGradientFit,
     SpectralSobolev1Fit,
     build_fitter,

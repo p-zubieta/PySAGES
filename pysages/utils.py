@@ -15,8 +15,8 @@ import jaxlib.xla_extension as xe
 
 JaxArray = xe.DeviceArray
 Bool = Union[JaxArray, bool]
-Float = Union[JaxArray, float]
 Int = Union[JaxArray, int]
+Float = Union[JaxArray, float]
 Scalar = Union[None, bool, int, float]
 
 

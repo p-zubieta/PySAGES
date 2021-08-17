@@ -2,10 +2,8 @@
 # Copyright (c) 2020-2021: PySAGES contributors
 # See LICENSE.md and CONTRIBUTORS.md at https://github.com/SSAGESLabs/PySAGES
 
-import importlib
-import hoomd
-
 from functools import partial
+from importlib import import_module
 from typing import Callable
 from warnings import warn
 
@@ -21,7 +19,6 @@ from hoomd.dlext import (
     positions_types,
     rtags,
     velocities_masses,
-    DLextSampler
 )
 
 from pysages.backends.core import ContextWrapper
@@ -35,63 +32,49 @@ from pysages.backends.snapshot import (
 )
 from pysages.methods import SamplingMethod
 
+import hoomd
+
 
 # TODO: Figure out a way to automatically tie the lifetime of Sampler
 # objects to the contexts they bind to
 CONTEXTS_SAMPLERS = {}
 
 
-class Sampler(DLextSampler):
-    def __init__(self, sysdef, method_bundle, bias, dt, callback: Callable):
-        _ , initialize, update = method_bundle
+class Sampler(HalfStepHook):
+    def __init__(self, method_bundle, sysview, bias, callback: Callable):
+        super().__init__()
+        #
+        snapshot, initialize, update = method_bundle
+        self.snapshot = snapshot
         self.state = initialize()
-        self.callback = callback
+        self.update_snapshot = partial(update_snapshot, snapshot, sysview)
+        self.update_state = update
         self.bias = bias
-        box = sysdef.getParticleData().getGlobalBox()
-        self.pybox = self._get_pybox(box)
-        self.dt = dt
-
-        def python_update(positions, vel_mass, rtags, imgs, forces):
-            positions = asarray(positions)
-            vel_mass = asarray(vel_mass)
-            ids = asarray(rtags)
-            images = asarray(imgs)
-            forces = asarray(forces)
-            snap = Snapshot(positions=positions,
-                            vel_mass = vel_mass,
-                            forces=forces,
-                            ids=ids,
-                            images=images,
-                            box=self.pybox,
-                            dt=self.dt)
-            self.state = update(snap, self.state)
-            self.bias(snap, self.state)
-            if self.callback:
-                self.callback(snap, self.state, 0)
-
-        super().__init__(sysdef, python_update)
-
-    def _get_pybox(self, box):
-        L = box.getL()
-        xy = box.getTiltFactorXY()
-        xz = box.getTiltFactorXZ()
-        yz = box.getTiltFactorYZ()
-        lo = box.getLo()
-        H = (
-            (L.x, xy * L.y, xz * L.z),
-            (0.0,      L.y, yz * L.z),
-            (0.0,      0.0,      L.z)
-        )
-        origin = (lo.x, lo.y, lo.z)
-        return Box(H, origin)
+        self.update = build_updater(self, callback)
 
 
+def build_updater(self, callback):
+    if callback:
+        def update(timestep):
+            self.snapshot = self.update_snapshot()
+            self.state = self.update_state(self.snapshot, self.state)
+            self.bias(self.snapshot, self.state)
+            callback(self.snapshot, self.state, timestep)
+    else:
+        def update(timestep):
+            self.snapshot = self.update_snapshot()
+            self.state = self.update_state(self.snapshot, self.state)
+            self.bias(self.snapshot, self.state)
+
+    return update
+
+
+default_location = (lambda: AccessLocation.OnHost)
+
+# If we have support for GPU make it the default device
 if hasattr(AccessLocation, "OnDevice"):
     def default_location():
         return AccessLocation.OnDevice
-else:
-    def default_location():
-        return AccessLocation.OnHost
 
 
 def is_on_gpu(context):
@@ -164,13 +147,13 @@ def build_helpers(context, sampling_method):
     # Depending on the device being used we need to use either cupy or numpy
     # (or numba) to generate a view of jax's DeviceArrays
     if is_on_gpu(context):
-        cupy = importlib.import_module("cupy")
+        cupy = import_module("cupy")
         view = cupy.asarray
 
         def sync_forces():
             cupy.cuda.get_current_stream().synchronize()
     else:
-        utils = importlib.import_module(".utils", package = "pysages.backends")
+        utils = import_module(".utils", package = "pysages.backends")
         view = utils.view
 
         def sync_forces():
@@ -212,7 +195,7 @@ def bind(
     method_bundle = sampling_method.build(snapshot, helpers)
     sync_and_bias = partial(bias, sync_backend = sysview.synchronize)
     #
-    sampler = Sampler(context.system_definition, method_bundle, sync_and_bias, context.integrator.dt, callback)
+    sampler = Sampler(method_bundle, sysview, sync_and_bias, callback)
     context.integrator.cpp_integrator.setHalfStepHook(sampler)
     #
     CONTEXTS_SAMPLERS[context] = sampler

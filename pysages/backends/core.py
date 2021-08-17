@@ -29,7 +29,7 @@ class ContextWrapper:
         module_name = type(context).__module__
         if module_name.startswith("hoomd"):
             self._backend_name = "hoomd"
-        elif module_name.startswith("simtk.openmm") or module_name.startswith("openmm"):
+        elif module_name.startswith("openmm") or module_name.startswith("simtk.openmm"):
             self._backend_name = "openmm"
 
         if self._backend_name is not None:
