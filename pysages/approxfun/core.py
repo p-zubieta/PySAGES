@@ -213,16 +213,17 @@ def build_fitter(model: SpectralGradientFit):
     and returns a `fun: Fun` object which approximates `f` over
     the domain [-1, 1]ⁿ.
     """
+    axes = tuple(range(model.grid.shape.size))
     #
     if model.is_periodic:
         def fit(dy):
-            std = dy.std(axis = 0)
+            std = dy.std(axis = axes)
             std = np.where(std == 0, 1, std)
-            dy = (dy - dy.mean(axis = 0)) / std
+            dy = (dy - dy.mean(axis = axes)) / std
             return Fun(std, model.pinv @ dy.flatten(), np.array(0.0))
     else:
         def fit(dy):
-            std = dy.std(axis = 0)
+            std = dy.std(axis = axes)
             std = np.where(std == 0, 1, std)
             dy = dy / std
             return Fun(std, model.pinv @ dy.flatten(), np.array(0.0))
@@ -238,10 +239,11 @@ def build_fitter(model: SpectralSobolev1Fit):
     and in turn returns a `fun: Fun` object which approximates `f` over
     the domain [-1, 1]ⁿ.
     """
+    axes = tuple(range(model.grid.shape.size))
     #
     def fit(y, dy):
         mean = y.mean()
-        std = np.maximum(y.std(axis = 0).max(), dy.std(axis = 0).max())
+        std = np.maximum(y.std(), dy.std(axis = axes).max())
         std = np.where(std == 0, 1, std)
         y = (y - mean) / std
         dy = dy / std
