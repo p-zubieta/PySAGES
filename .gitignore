@@ -4,6 +4,7 @@ build/
 dist/
 docs/build
 pysages.egg-info/
-examples/*/*pdf
-examples/*/*dat
-examples/*/*gsd
+examples/*.pdf
+examples/*.dat
+examples/*.gsd
+*.swp
