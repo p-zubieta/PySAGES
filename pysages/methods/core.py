@@ -5,9 +5,10 @@
 from abc import ABC, abstractmethod
 from functools import reduce
 from operator import or_
-from typing import Callable, Mapping
+from typing import Callable, Optional
 
 from jax import jit
+from plum import dispatch
 
 from pysages.backends import ContextWrapper
 from pysages.collective_variables.core import build
@@ -44,9 +45,10 @@ class SamplingMethod(ABC):
         """
         pass
 
+    @dispatch
     def run(
-        self, context_generator: Callable, timesteps: int, callback: Callable = None,
-        context_args: Mapping = dict(), **kwargs
+        self, context_generator: Callable, timesteps: int,
+        callback: Optional[Callable] = None, context_args: dict = {}, **kwargs
     ):
         """
         Base implementation of running a single simulation/replica with a sampling method.
@@ -67,9 +69,20 @@ class SamplingMethod(ABC):
             `kwargs` gets passed to the backend `run` function.
         """
         context = context_generator(**context_args)
-        wrapped_context = ContextWrapper(context, self, callback)
-        with wrapped_context:
-            wrapped_context.run(timesteps, **kwargs)
+        self.context = ContextWrapper(context, self, callback)
+        with self.context:
+            self.context.run(timesteps, **kwargs)
+
+    @dispatch
+    def run(self, timesteps: int):
+        if "context" not in self.__dict__:
+            raise ValueError(
+                "When running for the first time, a function for generating "
+                "the simulation context is required."
+            )
+
+        with self.context:
+            self.context.run(timesteps)
 
 
 class GriddedSamplingMethod(SamplingMethod):
