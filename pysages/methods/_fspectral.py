@@ -14,12 +14,9 @@ from pysages.approxfun import (
     SpectralGradientFit,
     build_fitter,
     build_grad_evaluator,
-    # compute_mesh,
-    scale,
 )
 from pysages.grids import Chebyshev, Grid, build_indexer, convert
 from pysages.methods.core import GriddedSamplingMethod, generalize
-# from pysages.methods._funn import _estimate_abf
 from pysages.utils import Bool, Int, JaxArray
 
 import jax.numpy as np
@@ -66,6 +63,7 @@ class ForceSpectrum(GriddedSamplingMethod):
             convert(self.grid, Grid[Chebyshev])
         )
         self.model = SpectralGradientFit(self.grid)
+        self.external_force = self.kwargs.get("external_force", lambda rs: 0)
         return _fspectral(self, snapshot, helpers)
 
 
@@ -76,6 +74,7 @@ def _fspectral(method, snapshot, helpers):
     model = method.model
     fit_freq = method.fit_freq
     fit_threshold = method.fit_threshold
+    external_force = method.external_force
 
     dt = snapshot.dt
     dims = grid.shape.size
@@ -122,6 +121,7 @@ def _fspectral(method, snapshot, helpers):
         #
         F = estimate_force(PartialState(hist, Fsum, xi, I_xi, fun, use_abf))
         bias = np.reshape(-Jxi.T @ F, state.bias.shape)
+        bias = bias + external_force(data)
         #
         return ForceSpectrumState(
             bias, hist, Fsum, F, Wp, state.Wp, xi, fun, state.nstep + 1
@@ -154,10 +154,9 @@ def build_force_estimator(method: ForceSpectrum, grid: Grid):
     N = method.N
     model = method.model
     get_grad = build_grad_evaluator(model)
-    _scale = partial(scale, grid = grid)
 
     def interpolate_force(fun, xi, F):
-        return get_grad(fun, _scale(xi)).reshape(F.shape)
+        return get_grad(fun, xi).reshape(F.shape)
 
     def _estimate_force(state):
         i = state.I

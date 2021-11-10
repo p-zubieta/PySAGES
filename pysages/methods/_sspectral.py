@@ -49,13 +49,25 @@ class CFFSpectral(GriddedSamplingMethod):
     snapshot_flags = {"positions", "indices", "momenta"}
 
     def __call__(self, snapshot, helpers):
-        kT = self.kwargs.get("kT", 1.0)
-        N = np.asarray(self.kwargs.get('N', 100))
-        fit_freq = self.kwargs.get("fit_freq", 500)
-        return _fspectral(snapshot, self.cv, self.grid, N, kT, fit_freq, helpers)
+        if "kT" not in self.kwargs:
+            raise ValueError("The value of kT must be provided")
+
+        self.kT = self.kwargs["kT"]
+        self.N = np.asarray(self.kwargs.get('N', 100))
+        self.fit_freq = self.kwargs.get("fit_freq", 500)
+        self.external_force = self.kwargs.get("external_force", lambda rs: 0)
+
+        return _fspectral(self, snapshot, helpers)
 
 
-def _fspectral(snapshot, cv, grid, N, kT, fit_freq, helpers):
+def _fspectral(method, snapshot, helpers):
+    N = method.N
+    kT = method.kT
+    cv = method.cv
+    grid = method.grid
+    fit_freq = method.fit_freq
+    external_force = method.external_force
+
     dt = snapshot.dt
     dims = grid.shape.size
     natoms = np.size(snapshot.positions, 0)
@@ -122,6 +134,7 @@ def _fspectral(snapshot, cv, grid, N, kT, fit_freq, helpers):
         #
         F = cond(use_abf, estimate_abf, estimate_force, (fun, x, F_x, N_x))
         bias = np.reshape(-Jx.T @ F, state.bias.shape)
+        bias = bias + external_force(data)
         #
         return CFFSpectralState(
             bias, hist, phist, phi, prob, Fsum, F, Wp, state.Wp, fun, nstep + 1

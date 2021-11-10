@@ -47,29 +47,35 @@ class FUNN(NNSamplingMethod):
     snapshot_flags = {"positions", "indices", "momenta"}
 
     def build(self, snapshot, helpers):
-        N = np.asarray(self.kwargs.get('N', 100))
-        train_freq = np.asarray(self.kwargs.get("train_freq", 5000))
-        optimizer = self.kwargs.get("optimzer", LevenbergMarquardt())
+        self.N = np.asarray(self.kwargs.get('N', 100))
+        self.train_freq = np.asarray(self.kwargs.get("train_freq", 5000))
+        self.optimizer = self.kwargs.get("optimzer", LevenbergMarquardt())
         model = self.kwargs.get("model", MLP)
         model_kwargs = self.kwargs.get("model_kwargs", dict())
 
         def build_model(ins, outs, topology, **kwargs):
             return model(ins, outs, topology, **model_kwargs, **kwargs)
 
-        return _funn(
-            snapshot, self.cv, self.grid, self.topology,
-            build_model, N, train_freq, optimizer, helpers
-        )
+        self.build_model = build_model
+        self.external_force = self.kwargs.get("external_force", lambda rs: 0)
+
+        return _funn(self, snapshot, helpers)
 
 
-def _funn(snapshot, cv, grid, topology, build_model, N, train_freq, optimizer, helpers):
+def _funn(method, snapshot, helpers):
+    N = method.N
+    cv = method.cv
+    grid = method.grid
+    train_freq = method.train_freq
+    external_force = method.external_force
+
     dt = snapshot.dt
     dims = grid.shape.size
     natoms = np.size(snapshot.positions, 0)
     # Neural network and optimizer
     scale = partial(_scale, grid = grid)
-    model = build_model(dims, dims, topology, f_in = scale)
-    fit = build_fitting_function(model, optimizer)
+    model = method.build_model(dims, dims, method.topology, transform = scale)
+    fit = build_fitting_function(model, method.optimizer)
     ps, layout = unpack(model.parameters)
     # Training data
     inputs = (compute_mesh(grid) + 1) * grid.size / 2 + grid.lower
@@ -116,6 +122,7 @@ def _funn(snapshot, cv, grid, topology, build_model, N, train_freq, optimizer, h
         #
         F = cond(use_abf, estimate_abf, estimate_funn, (nn, x, F_x, N_x))
         bias = np.reshape(-Jx.T @ F, state.bias.shape)
+        bias = bias + external_force(data)
         #
         return FUNNState(bias, hist, Fsum, F, Wp, state.Wp, nn, state.nstep + 1)
 

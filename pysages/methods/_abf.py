@@ -38,6 +38,7 @@ class ABF(GriddedSamplingMethod):
     def build(self, snapshot, helpers):
         self.N = np.asarray(self.kwargs.get("N", 200))
         self.k = self.kwargs.get("k", None)
+        self.external_force = self.kwargs.get("external_force", lambda rs: 0)
         return _abf(self, snapshot, helpers)
 
 
@@ -45,6 +46,7 @@ def _abf(method, snapshot, helpers):
     grid = method.grid
     cv = method.cv
     k = method.k
+    external_force = method.external_force
 
     dt = snapshot.dt
     dims = grid.shape.size
@@ -84,6 +86,7 @@ def _abf(method, snapshot, helpers):
         #
         F = estimate_force(xi, I_xi, F_xi, N_xi).reshape(dims)
         bias = np.reshape(-Jxi.T @ F, state.bias.shape)
+        bias = bias + external_force(data)
         #
         return ABFState(bias, hist, Fsum, F, Wp, state.Wp, xi)
 

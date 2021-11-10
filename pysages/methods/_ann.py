@@ -58,6 +58,8 @@ class ANN(NNSamplingMethod):
         self.build_model = build_model
         self.optimizer = self.kwargs.get("optimzer", LevenbergMarquardt())
 
+        self.external_force = self.kwargs.get("external_force", lambda rs: 0)
+
         return _ann(self, snapshot, helpers)
 
 
@@ -66,6 +68,7 @@ def _ann(method: ANN, snapshot, helpers):
     kT = method.kT
     grid = method.grid
     train_freq = method.train_freq
+    external_force = method.external_force
 
     dims = grid.shape.size
     natoms = np.size(snapshot.positions, 0)
@@ -119,6 +122,7 @@ def _ann(method: ANN, snapshot, helpers):
         #
         F = cond(use_nn, estimate_force, lambda _: np.zeros(dims), (nn, x))
         bias = np.reshape(-Jx.T @ F, state.bias.shape)
+        bias = bias + external_force(data)
         #
         return ANNState(bias, hist, phi, prob, nn, nstep + 1)
 
