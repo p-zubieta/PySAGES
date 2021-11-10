@@ -4,14 +4,15 @@
 
 from abc import ABC
 from dataclasses import dataclass
+from functools import partial
 from itertools import product
-from jax import jit, vmap
-from plum import dispatch
-from pysages.grids import Grid, Chebyshev
-from pysages.utils import Float, JaxArray
 from typing import NamedTuple
 
-import jax.numpy as np
+from jax import jit, numpy as np, vmap
+from plum import dispatch
+
+from pysages.grids import Grid, Chebyshev
+from pysages.utils import Float, JaxArray
 
 
 class Fun(NamedTuple):
@@ -159,6 +160,7 @@ def vandergrad_builder(grid, exponents):
     Returns a closure over the grid and exponents to build a Vandermonde-like
     matrix for fitting the gradient of a Fourier or Chebyshev expansion.
     """
+    s = 2 * (np.pi if grid.is_periodic else 1) / grid.size
     ns = exponents
     #
     if grid.shape.size == 1:
@@ -171,11 +173,11 @@ def vandergrad_builder(grid, exponents):
     if grid.is_periodic:
         def expand(x):
             z = np.exp(-1j * np.pi * ns * x)
-            return flip_multiply(ns * z, z).T
+            return flip_multiply(s * ns * z, z).T
     else:
         def expand(x):
             z = x**(np.maximum(ns - 1, 0))
-            return flip_multiply(ns * z, x).T
+            return flip_multiply(s * ns * z, x).T
     #
     return jit(lambda xs: vmap(expand)(xs).reshape(-1, np.size(ns, 0)))
 
@@ -217,7 +219,7 @@ def build_fitter(model: SpectralGradientFit):
     the domain [-1, 1]ⁿ.
     """
     axes = tuple(range(model.grid.shape.size))
-    #
+
     if model.is_periodic:
         def fit(dy):
             std = dy.std(axis = axes)
@@ -230,7 +232,7 @@ def build_fitter(model: SpectralGradientFit):
             std = np.where(std == 0, 1, std)
             dy = dy / std
             return Fun(std, model.pinv @ dy.flatten(), np.array(0.0))
-    #
+
     return jit(fit)
 
 
@@ -243,7 +245,7 @@ def build_fitter(model: SpectralSobolev1Fit):
     the domain [-1, 1]ⁿ.
     """
     axes = tuple(range(model.grid.shape.size))
-    #
+
     def fit(y, dy):
         mean = y.mean()
         std = np.maximum(y.std(), dy.std(axis = axes).max())
@@ -252,7 +254,7 @@ def build_fitter(model: SpectralSobolev1Fit):
         dy = dy / std
         cs = model.pinv @ np.hstack((y.flatten(), dy.flatten()))
         return Fun(std, cs[1:], cs[0] + mean / std)
-    #
+
     return jit(fit)
 
 
@@ -262,8 +264,9 @@ def build_evaluator(model):
     by `model`. The returned method takes a `fun` and a value (or array of
     values) `x` to evaluate the approximant.
     """
+    transform = partial(scale, grid = model.grid)
     vander = vander_builder(model.grid, model.exponents)
-    #
+
     if model.is_periodic:
         def restack(x):
             return np.hstack((np.real(x), np.imag(x)))
@@ -274,10 +277,10 @@ def build_evaluator(model):
     def evaluate(f: Fun, x):
         c0 = f.c0
         cs = f.coefficients
-        x = np.array(x, ndmin = 2)
+        x = transform(np.array(x, ndmin = 2))
         y = f.scale * (restack(vander(x)) @ cs + c0)
         return y.reshape(np.size(x, 0), -1)
-    #
+
     return jit(evaluate)
 
 
@@ -287,6 +290,7 @@ def build_grad_evaluator(model):
     expansion defined by `model`. The returned method takes a `fun` and a value
     (or array of values) `x` to evaluate the approximant.
     """
+    transform = partial(scale, grid = model.grid)
     vandergrad = vandergrad_builder(model.grid, model.exponents)
 
     if model.is_periodic:
@@ -298,8 +302,8 @@ def build_grad_evaluator(model):
 
     def get_gradient(f: Fun, x):
         cs = f.coefficients
-        x = np.array(x, ndmin = 2)
-        y = f.scale * (restack(vandergrad(x)) @ cs)
-        return y.reshape(x.shape)
+        x = transform(np.array(x, ndmin = 2))
+        dy = f.scale * (restack(vandergrad(x)) @ cs)
+        return dy.reshape(x.shape)
 
     return jit(get_gradient)
