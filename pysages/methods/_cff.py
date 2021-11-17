@@ -3,11 +3,12 @@
 # See LICENSE.md and CONTRIBUTORS.md at https://github.com/SSAGESLabs/PySAGES
 
 from functools import partial
+from plum import dispatch
+from typing import NamedTuple, Tuple
+
 from jax import grad, vmap
 from jax.lax import cond
 from jax.scipy import linalg
-from plum import dispatch
-from typing import NamedTuple, Tuple
 
 from pysages.ml.models import MLP, Siren
 from pysages.ml.objectives import (
@@ -174,7 +175,7 @@ def build_pmf_learner(method: CFF):
     inputs = (compute_mesh(grid) + 1) * grid.size / 2 + grid.lower
     _, layout = unpack(model.parameters)
 
-    w = 3 if type(model) is Siren else 7
+    w = 7 if type(model) is Siren else 7
     smooth = partial(
         convolve,
         kernel = blackman_kernel(dims, w),
@@ -195,7 +196,7 @@ def build_pmf_learner(method: CFF):
 
     def learn_pmf(state):
         prob = state.prob + state.histp * np.exp(state.A / kT)
-        A = kT * np.log(np.maximum(N, prob))
+        A = kT * np.log(prob)
         #
         F = state.Fsum / np.maximum(N, state.hist.reshape(shape))
         #

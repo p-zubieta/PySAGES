@@ -2,21 +2,16 @@
 # Copyright (c) 2020-2021: PySAGES contributors
 # See LICENSE.md and CONTRIBUTORS.md at https://github.com/SSAGESLabs/PySAGES
 
+from typing import NamedTuple
+
+from jax import numpy as np
 from jax.lax import cond
 from jax.scipy.linalg import solve
 from plum import dispatch
-from typing import NamedTuple
 
 from pysages.grids import Grid, build_indexer
 from pysages.methods.core import GriddedSamplingMethod, generalize
 from pysages.utils import JaxArray
-
-import jax.numpy as np
-
-
-# ======= #
-#   ABF   #
-# ======= #
 
 
 class ABFState(NamedTuple):
@@ -82,7 +77,6 @@ def _abf(method, snapshot, helpers):
         Fsum = state.Fsum.at[I_xi].add(dWp_dt + state.F)
         F_xi = Fsum[I_xi]
         N_xi = hist[I_xi]
-        # F = F_xi / np.maximum(N_xi, N)
         #
         F = estimate_force(xi, I_xi, F_xi, N_xi).reshape(dims)
         bias = np.reshape(-Jxi.T @ F, state.bias.shape)

@@ -3,16 +3,17 @@
 # See LICENSE.md and CONTRIBUTORS.md at https://github.com/SSAGESLabs/PySAGES
 
 from functools import partial
-from jax import grad, vmap
+from typing import NamedTuple, Tuple
+
+from jax import grad, numpy as np, vmap
 from jax.lax import cond
 from jax.scipy import linalg
 from plum import dispatch
-from typing import NamedTuple, Tuple
 
 from pysages.ml.models import MLP, Siren
 from pysages.ml.objectives import (
     Sobolev1SSE,
-    # L2Regularization,
+    L2Regularization,
     # VarRegularization,
 )
 from pysages.ml.optimizers import (
@@ -27,13 +28,6 @@ from pysages.grids import build_indexer
 from pysages.methods.core import NNSamplingMethod, generalize
 from pysages.utils import Bool, Int, JaxArray
 # from pysages.methods._funn import _estimate_abf
-
-import jax.numpy as np
-
-
-# ======== #
-#   FUNN   #
-# ======== #
 
 
 class CFFState(NamedTuple):
@@ -54,7 +48,7 @@ class CFFState(NamedTuple):
         return repr("PySAGES " + type(self).__name__)
 
 
-class PartialCFFState(NamedTuple):
+class PartialState(NamedTuple):
     hist: JaxArray
     Fsum: JaxArray
     xi:   JaxArray
@@ -82,9 +76,10 @@ class CFF(NNSamplingMethod):
 
         self.build_model = build_model
         # reg = VarRegularization() if model is Siren else L2Regularization(0.0)
+        reg = L2Regularization(0.0 if model is Siren else 1e-4)
         max_iters = 250 if model is Siren else 500
         self.optimizer = self.kwargs.get("optimizer", LevenbergMarquardt(
-            loss = Sobolev1SSE(), max_iters = max_iters,  # reg = reg
+            loss = Sobolev1SSE(), max_iters = max_iters, reg = reg
         ))
 
         self.external_force = self.kwargs.get("external_force", lambda rs: 0)
@@ -151,7 +146,7 @@ def _cff(method: CFF, snapshot, helpers):
         Fsum = state.Fsum.at[I_xi].add(dWp_dt + state.F)
         histp = histp.at[I_xi].add(1)
         #
-        F = estimate_force(PartialCFFState(hist, Fsum, xi, I_xi, nn, use_abf))
+        F = estimate_force(PartialState(hist, Fsum, xi, I_xi, nn, use_abf))
         bias = (-Jxi.T @ F).reshape(state.bias.shape)
         bias = bias + external_force(data)
         #
@@ -163,7 +158,7 @@ def _cff(method: CFF, snapshot, helpers):
 
 
 def build_pmf_learner(method: CFF):
-    N = method.N
+    # N = method.N
     kT = method.kT
     grid = method.grid
     optimizer = method.optimizer
@@ -194,11 +189,9 @@ def build_pmf_learner(method: CFF):
         return NNData(params, nn.mean, s)
 
     def learn_pmf(state):
-        # prob = state.prob + state.histp * np.exp(state.A / kT)
-        prob = state.prob + state.histp
-        A = kT * np.log(np.maximum(N, prob))
-        #
-        F = state.Fsum / np.maximum(N, state.hist.reshape(shape))
+        prob = state.prob + state.histp * np.exp(state.A / kT)
+        A = kT * np.log(np.maximum(1, prob))
+        F = state.Fsum / np.maximum(1, state.hist.reshape(shape))
         #
         # Should we reset the model parameters before training?
         nn = train(state.nn, (A, F))
@@ -243,7 +236,7 @@ def build_force_estimator(method: CFF):
     _, layout = unpack(model.parameters)
 
     def apply(params, x):
-        return model.apply(params, x).sum()
+        return model.apply(params, x).item()
 
     get_grad = grad(apply, argnums = 1)
 

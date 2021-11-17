@@ -5,6 +5,7 @@
 from functools import partial
 from typing import NamedTuple, Tuple
 
+from jax import numpy as np
 from jax.lax import cond
 from jax.scipy.linalg import solve
 from plum import dispatch
@@ -19,12 +20,6 @@ from pysages.grids import Chebyshev, Grid, build_indexer, convert
 from pysages.methods.core import GriddedSamplingMethod, generalize
 from pysages.utils import Bool, Int, JaxArray
 
-import jax.numpy as np
-
-
-# ===================== #
-#   Spectral Sampling   #
-# ===================== #
 
 class ForceSpectrumState(NamedTuple):
     bias:  JaxArray
@@ -82,11 +77,11 @@ def _fspectral(method, snapshot, helpers):
     get_grid_index = build_indexer(grid)
     average_forces = partial(_average_forces, N)
     fit = build_fitter(model)
-    estimate_force = build_force_estimator(method, grid)
+    estimate_force = build_force_estimator(method)
 
     def initialize():
         bias = np.zeros((natoms, 3))
-        hist = np.ones(grid.shape, dtype=np.uint32)
+        hist = np.zeros(grid.shape, dtype=np.uint32)
         Fsum = np.zeros((*grid.shape, dims))
         F = np.zeros(dims)
         Wp = np.zeros(dims)
@@ -133,7 +128,7 @@ def _fspectral(method, snapshot, helpers):
 def _average_forces(N, state):
     Fsum = state.Fsum
     shape = (*drop_last(Fsum.shape), 1)
-    return Fsum / np.maximum(state.hist.reshape(shape), N)
+    return Fsum / np.maximum(state.hist.reshape(shape), 1)
 
 
 def _apply_restraints(lo, up, klo, kup, xi):
@@ -149,9 +144,10 @@ def last(collection, n = 0):
 
 
 @dispatch
-def build_force_estimator(method: ForceSpectrum, grid: Grid):
+def build_force_estimator(method: ForceSpectrum):
     k = method.k
     N = method.N
+    grid = method.grid
     model = method.model
     get_grad = build_grad_evaluator(model)
 

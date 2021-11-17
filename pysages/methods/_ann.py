@@ -3,9 +3,15 @@
 # See LICENSE.md and CONTRIBUTORS.md at https://github.com/SSAGESLabs/PySAGES
 
 from functools import partial
-from jax import grad, vmap
-from jax.lax import cond
 from typing import NamedTuple
+
+from jax import grad, numpy as np, vmap
+from jax.lax import cond
+
+from pysages.approxfun import compute_mesh, scale as _scale
+from pysages.grids import build_indexer
+from pysages.utils import Int, JaxArray
+from pysages.methods.core import NNSamplingMethod, generalize
 from pysages.ml.models import MLP
 # from pysages.ml.objectives import L2Regularization, estimate_l2_coefficient
 from pysages.ml.optimizers import (
@@ -15,18 +21,7 @@ from pysages.ml.optimizers import (
 )
 from pysages.ml.training import NNData, build_fitting_function, normalize, convolve
 from pysages.ml.utils import blackman_kernel, pack, unpack
-from pysages.approxfun import compute_mesh, scale as _scale
-from pysages.grids import build_indexer
-from pysages.utils import Int, JaxArray
 
-from .core import NNSamplingMethod, generalize  # pylint: disable=relative-beyond-top-level
-
-import jax.numpy as np
-
-
-# ======== #
-#   FUNN   #
-# ======== #
 
 class ANNState(NamedTuple):
     bias:   JaxArray
@@ -47,17 +42,15 @@ class ANN(NNSamplingMethod):
         if "kT" not in self.kwargs:
             raise ValueError("The value of kT must be provided")
 
+        def build_model(ins, outs, topology, **kwargs):
+            return model(ins, outs, topology, **model_kwargs, **kwargs)
+
         self.kT = self.kwargs["kT"]
         self.train_freq = self.kwargs.get("train_freq", 5000)
         model = self.kwargs.get("model", MLP)
         model_kwargs = self.kwargs.get("model_kwargs", dict())
-
-        def build_model(ins, outs, topology, **kwargs):
-            return model(ins, outs, topology, **model_kwargs, **kwargs)
-
         self.build_model = build_model
         self.optimizer = self.kwargs.get("optimzer", LevenbergMarquardt())
-
         self.external_force = self.kwargs.get("external_force", lambda rs: 0)
 
         return _ann(self, snapshot, helpers)
@@ -97,9 +90,9 @@ def _ann(method: ANN, snapshot, helpers):
 
     def initialize():
         bias = np.zeros((natoms, 3))
-        hist = np.ones(gshape, dtype = np.uint32)
+        hist = np.zeros(gshape, dtype = np.uint32)
         phi = np.zeros(gshape)
-        prob = np.ones(gshape)
+        prob = np.zeros(gshape)
         nn = NNData(ps, np.array(0.0), np.array(1.0))
         return ANNState(bias, hist, phi, prob, nn, 1)
 
@@ -131,7 +124,7 @@ def _ann(method: ANN, snapshot, helpers):
 
 def _learn_pmf(kT, train, apply, layout, inputs, state):
     prob = state.prob + state.hist * np.exp(state.phi / kT)
-    phi = kT * np.log(prob)
+    phi = kT * np.log(np.maximum(1, prob))
     #
     nn = train(inputs, state.nn, phi)
     #
