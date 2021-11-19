@@ -86,6 +86,7 @@ class L2Regularization(Regularizer, L2Regularization):
     coeff: Float
         Hyperparameter, coefficient for the regularizing term.
     """
+    pass
 
 
 class VarRegularization(Regularizer):
