@@ -6,12 +6,13 @@ from functools import partial
 from plum import dispatch
 from typing import NamedTuple, Tuple
 
-from jax import grad, vmap
+from jax import grad, numpy as np, vmap
 from jax.lax import cond
 from jax.scipy import linalg
 
 from pysages.ml.models import MLP, Siren
 from pysages.ml.objectives import (
+    SSE,
     Sobolev1SSE,
     # L2Regularization,
     # VarRegularization,
@@ -29,13 +30,6 @@ from pysages.methods.core import NNSamplingMethod, generalize
 from pysages.utils import Bool, Int, JaxArray
 # from pysages.methods._funn import _estimate_abf
 
-import jax.numpy as np
-
-
-# ======== #
-#   FUNN   #
-# ======== #
-
 
 class CFFState(NamedTuple):
     bias:  JaxArray
@@ -48,6 +42,7 @@ class CFFState(NamedTuple):
     Wp:    JaxArray
     Wp_:   JaxArray
     xi:    JaxArray
+    cnn:   NNData
     nn:    NNData
     nstep: Int
 
@@ -60,7 +55,7 @@ class PartialCFFState(NamedTuple):
     Fsum: JaxArray
     xi:   JaxArray
     ind:  Tuple
-    nn:   NNData
+    cnn:  NNData
     pred: Bool
 
 
@@ -84,9 +79,10 @@ class CFF(NNSamplingMethod):
         self.build_model = build_model
         # reg = VarRegularization() if model is Siren else L2Regularization(0.0)
         max_iters = 250 if model is Siren else 500
-        self.optimizer = self.kwargs.get("optimizer", LevenbergMarquardt(
+        self.coptimizer = LevenbergMarquardt(
             loss = Sobolev1SSE(), max_iters = max_iters,  # reg = reg
-        ))
+        )
+        self.optimizer = LevenbergMarquardt(loss = SSE(), max_iters = max_iters)
 
         self.external_force = self.kwargs.get("external_force", lambda rs: 0)
 
@@ -117,16 +113,17 @@ def _cff(method: CFF, snapshot, helpers):
     def initialize():
         bias = np.zeros((natoms, 3))
         hist = np.zeros(gshape, dtype = np.uint32)
-        histp = np.ones(gshape, dtype = np.uint32)
+        histp = np.zeros(gshape, dtype = np.uint32)
         A = np.zeros(gshape)
         prob = np.zeros(gshape)
         Fsum = np.zeros((*grid.shape, dims))
         F = np.zeros(dims)
         Wp = np.zeros(dims)
         Wp_ = np.zeros(dims)
+        cnn = NNData(ps, np.zeros(dims), np.array(1.0))
         nn = NNData(ps, np.zeros(dims), np.array(1.0))
         xi, _ = cv(helpers.query(snapshot))
-        return CFFState(bias, hist, histp, A, prob, Fsum, F, Wp, Wp_, xi, nn, 1)
+        return CFFState(bias, hist, histp, A, prob, Fsum, F, Wp, Wp_, xi, cnn, nn, 1)
 
     def update(state, data):
         # During the intial stage, when there are not enough collected samples, use ABF
@@ -134,10 +131,10 @@ def _cff(method: CFF, snapshot, helpers):
         use_abf = nstep <= 1 * train_freq
         #
         # Estimate free energy / train NN
-        histp, A, prob, nn = cond(
+        histp, A, prob, cnn, nn = cond(
             (nstep % train_freq == 1) & ~use_abf,
             learn_pmf,
-            lambda state: (state.histp, state.A, state.prob, state.nn),
+            lambda state: (state.histp, state.A, state.prob, state.cnn, state.nn),
             state,
         )
         # Compute the collective variable and its jacobian
@@ -152,21 +149,22 @@ def _cff(method: CFF, snapshot, helpers):
         Fsum = state.Fsum.at[I_xi].add(dWp_dt + state.F)
         histp = histp.at[I_xi].add(1)
         #
-        F = estimate_force(PartialCFFState(hist, Fsum, xi, I_xi, nn, use_abf))
+        F = estimate_force(PartialCFFState(hist, Fsum, xi, I_xi, cnn, use_abf))
         bias = (-Jxi.T @ F).reshape(state.bias.shape)
         bias = bias + external_force(data)
         #
         return CFFState(
-            bias, hist, histp, A, prob, Fsum, F, Wp, state.Wp, xi, nn, nstep + 1
+            bias, hist, histp, A, prob, Fsum, F, Wp, state.Wp, xi, cnn, nn, nstep + 1
         )
 
     return snapshot, initialize, generalize(update, helpers)
 
 
 def build_pmf_learner(method: CFF):
-    N = method.N
+    # N = method.N
     kT = method.kT
     grid = method.grid
+    coptimizer = method.coptimizer
     optimizer = method.optimizer
     model = method.model
 
@@ -175,7 +173,7 @@ def build_pmf_learner(method: CFF):
     inputs = (compute_mesh(grid) + 1) * grid.size / 2 + grid.lower
     _, layout = unpack(model.parameters)
 
-    w = 7 if type(model) is Siren else 7
+    w = 5 if type(model) is Siren else 7
     smooth = partial(
         convolve,
         kernel = blackman_kernel(dims, w),
@@ -187,29 +185,29 @@ def build_pmf_learner(method: CFF):
 
     preprocess = partial(_preprocess, smooth if dims > 1 else vsmooth, vsmooth)
     # preprocess = (lambda y, dy: (y, dy, 1.0))
+    cfit = build_fitting_function(model, coptimizer)
     fit = build_fitting_function(model, optimizer)
 
-    def train(nn, data):
+    def train(cnn, nn, data):
         y, dy, s = preprocess(*data)
-        params = fit(nn.params, inputs, (y, dy)).params
-        return NNData(params, nn.mean, s)
+        cparams = cfit(cnn.params, inputs, (y, dy)).params
+        params = fit(nn.params, inputs, y).params
+        return NNData(cparams, cnn.mean, s), NNData(params, nn.mean, s)
 
     def learn_pmf(state):
         prob = state.prob + state.histp * np.exp(state.A / kT)
-        A = kT * np.log(prob)
-        #
-        F = state.Fsum / np.maximum(N, state.hist.reshape(shape))
-        #
-        # Should we reset the model parameters before training?
-        nn = train(state.nn, (A, F))
-        #
+        A = kT * np.log(np.maximum(1, prob))
+        F = state.Fsum / np.maximum(1, state.hist.reshape(shape))
+
+        cnn, nn = train(state.cnn, state.nn, (A, F))
+
         params = pack(nn.params, layout)
         A = nn.std * model.apply(params, inputs).reshape(A.shape)
         A = A - A.min()
-        #
+
         histp = np.zeros_like(state.histp)
-        #
-        return histp, A, prob, nn
+
+        return histp, A, prob, cnn, nn
 
     return learn_pmf
 
@@ -252,12 +250,10 @@ def build_force_estimator(method: CFF):
         return state.Fsum[i] / np.maximum(N, state.hist[i])
 
     def predict_force(state):
-        i = state.ind
-        nn = state.nn
+        cnn = state.cnn
         xi = state.xi
-        params = pack(nn.params, layout)
-        F = state.Fsum[i] / np.maximum(N, state.hist[i])
-        return np.maximum(F, nn.std * np.float64(get_grad(params, xi).flatten()))
+        params = pack(cnn.params, layout)
+        return cnn.std * np.float64(get_grad(params, xi).flatten())
 
     def _estimate_force(state):
         return cond(state.pred, estimate_abf, predict_force, state)

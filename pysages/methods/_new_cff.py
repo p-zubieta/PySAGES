@@ -236,7 +236,7 @@ def build_force_estimator(method: CFF):
     _, layout = unpack(model.parameters)
 
     def apply(params, x):
-        return model.apply(params, x).item()
+        return model.apply(params, x).sum()
 
     get_grad = grad(apply, argnums = 1)
 
