@@ -122,10 +122,10 @@ class Siren(AbstractMLP):
         pdf_in = variance_scaling(1.0 / 3, "fan_in", "uniform")
         pdf = variance_scaling(2.0 / omega**2, "fan_in", "uniform")
         # Sine activation function
-        σ_in = stax.elementwise(lambda x: np.sin(omega * x))
-        σ = stax.elementwise(lambda x: np.sin(x))
+        # σ = stax.elementwise(lambda x: np.sin(x))
+        σ = stax.elementwise(lambda x: np.sin(omega * x))
         # Build layers
-        layer_in = [stax.Flatten, *tlayer, stax.Dense(topology[0], pdf_in), σ_in]
+        layer_in = [stax.Flatten, *tlayer, stax.Dense(topology[0], pdf_in), σ]
         layers = list(chain.from_iterable(
             (stax.Dense(i, pdf), σ) for i in topology[1:]
         ))
