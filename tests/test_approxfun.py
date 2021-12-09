@@ -10,6 +10,7 @@ from pysages.approxfun import (
 
 import jax
 import jax.numpy as np
+import matplotlib.pyplot as plt
 
 
 # Test functions
@@ -51,8 +52,8 @@ def test_fourier_approx():
 
     fun = fit(dy)
 
-    assert np.all(np.isclose(y, evaluate(fun, x_scaled))).item()
-    assert np.all(np.isclose(dy, get_grad(fun, x_scaled))).item()
+    assert np.all(np.isclose(y, evaluate(fun, x))).item()
+    assert np.all(np.isclose(dy, get_grad(fun, x))).item()
 
     # fig, ax = plt.subplots()
     # ax.plot(x, dy)
@@ -71,8 +72,8 @@ def test_fourier_approx():
 
     sfun = fit(y, dy)
 
-    assert np.all(np.isclose(y, evaluate(sfun, x_scaled))).item()
-    assert np.all(np.isclose(dy, get_grad(sfun, x_scaled))).item()
+    assert np.all(np.isclose(y, evaluate(sfun, x))).item()
+    assert np.all(np.isclose(dy, get_grad(sfun, x))).item()
 
     assert np.linalg.norm(fun.coefficients - sfun.coefficients) < 1e-8
 
@@ -94,7 +95,8 @@ def test_cheb_approx():
         shape = (256,)
     )
 
-    x = compute_mesh(grid)
+    x_scaled = compute_mesh(grid)
+    x = grid.size / 2 * (x_scaled + 1) + grid.lower
 
     y = jax.vmap(g)(x.flatten()).reshape(x.shape)
     dy = jax.vmap(jax.grad(g))(x.flatten()).reshape(x.shape)
@@ -111,10 +113,10 @@ def test_cheb_approx():
 
     # fig, ax = plt.subplots()
     # ax.plot(x, y)
-    # ax.plot(x, y_)
+    # ax.plot(x, evaluate(fun, x))
     # plt.show()
 
     # fig, ax = plt.subplots()
     # ax.plot(x, dy)
-    # ax.plot(x, dy_)
+    # ax.plot(x, get_grad(fun, x))
     # plt.show()

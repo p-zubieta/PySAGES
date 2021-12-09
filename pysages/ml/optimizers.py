@@ -135,7 +135,7 @@ class LevenbergMarquardtBR(Optimizer):
     Levenberg-Marquardt optimizer with Bayesian regularization.
     """
     params:    LevenbergMarquardtParams = LevenbergMarquardtParams()
-    alpha:     Float = np.float64(0.0)
+    alpha:     Float = np.float32(0.0)
     max_iters: Int = 500
     update:    Callable = lambda a, b, c, t: t
 
@@ -201,7 +201,7 @@ def build(optimizer: LevenbergMarquardt, model):
         mu = np.float32(mu)
         #
         J = jacobian(p_, x, y)
-        H = damped_hessian(J, mu)
+        H = damped_hessian(J, mu, p_)
         Je = jac_err_prod(J, e_, p_)
         #
         dp = solve(H, Je, sym_pos = True)
@@ -238,7 +238,7 @@ def build(optimizer: LevenbergMarquardtBR, model):
     def initialize(params, x, y):
         e = error(params, x, y)
         mu = optimizer.params.mu_0
-        gamma = np.float64(params.size)
+        gamma = np.float32(params.size)
         beta = (x.size / m)**2 * (x.size - gamma) / sum_squares(e)
         beta = np.where(beta < 0, 1.0, beta)
         alpha = gamma / sum_squares(params)

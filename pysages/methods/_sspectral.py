@@ -58,7 +58,7 @@ class CFFSpectral(GriddedSamplingMethod):
             raise ValueError("The value of kT must be provided")
 
         self.kT = self.kwargs["kT"]
-        self.N = np.asarray(self.kwargs.get('N', 100))
+        self.N = np.asarray(self.kwargs.get('N', 500))
         self.k = self.kwargs.get("k", None)
         self.fit_freq = self.kwargs.get("fit_freq", 500)
         self.grid = (
@@ -157,7 +157,7 @@ def _fit_force_and_potential(kT, fit, evaluate, inputs, state):
     #
     histp = np.zeros_like(state.histp)
     #
-    return histp, A, state.prob, fun
+    return histp, A, prob, fun
 
 
 @dispatch
@@ -194,7 +194,7 @@ def build_force_estimator(method: CFFSpectral):
 
         def estimate_force(state):
             return cond(
-                np.any(np.array(state.I) == grid.shape),
+                np.any(np.array(state.ind) == grid.shape),
                 apply_restraints,
                 _estimate_force,
                 state

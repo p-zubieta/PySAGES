@@ -7,7 +7,7 @@ from itertools import chain
 from typing import Callable, Optional
 
 from jax import numpy as np
-from jax.nn.initializers import variance_scaling
+from jax.nn.initializers import normal, variance_scaling
 from plum import dispatch
 
 from pysages.ml.utils import rng_key
@@ -119,17 +119,18 @@ class Siren(AbstractMLP):
 
         tlayer = build_transform_layer(transform)
         # Weight initialization for Sirens
-        pdf_in = variance_scaling(1.0 / 3, "fan_in", "uniform")
-        pdf = variance_scaling(2.0 / omega**2, "fan_in", "uniform")
+        dtype = np.float32
+        init_W_in = variance_scaling(1.0 / (3 * indim), "fan_in", "uniform", dtype = dtype)
+        init_W = variance_scaling(2.0 / omega**2, "fan_in", "uniform", dtype = dtype)
+        init_b = normal(dtype = dtype)
         # Sine activation function
-        # σ = stax.elementwise(lambda x: np.sin(x))
         σ = stax.elementwise(lambda x: np.sin(omega * x))
         # Build layers
-        layer_in = [stax.Flatten, *tlayer, stax.Dense(topology[0], pdf_in), σ]
+        layer_in = [stax.Flatten, *tlayer, stax.Dense(topology[0], init_W_in, init_b), σ]
         layers = list(chain.from_iterable(
-            (stax.Dense(i, pdf), σ) for i in topology[1:]
+            (stax.Dense(i, init_W, init_b), σ) for i in topology[1:]
         ))
-        layers = layer_in + layers + [stax.Dense(outdim, pdf)]
+        layers = layer_in + layers + [stax.Dense(outdim, init_W, init_b)]
         #
         super().__init__(indim, layers, seed)
 

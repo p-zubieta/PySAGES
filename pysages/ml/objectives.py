@@ -77,6 +77,7 @@ class Regularizer:
 
 # On Python >= 3.9 NamedTuple cannot be used directly as superclass
 L2Regularization = NamedTuple("L2Regularization", [("coeff", Float)])
+AbsHarmonicRegularization = NamedTuple("AbsHarmonicRegularization", [("p0", Float)])
 
 
 class L2Regularization(Regularizer, L2Regularization):
@@ -85,6 +86,13 @@ class L2Regularization(Regularizer, L2Regularization):
 
     coeff: Float
         Hyperparameter, coefficient for the regularizing term.
+    """
+    pass
+
+
+class AbsHarmonicRegularization(Regularizer, AbsHarmonicRegularization):
+    """
+    Harmonic regularization with respect the absolute values of the network parameters.
     """
     pass
 
@@ -185,6 +193,17 @@ def build_cost_function(loss: Union[SSE, GradientsSSE], reg: VarRegularization):
 
 
 @dispatch
+def build_cost_function(loss: Union[SSE, GradientsSSE], reg: AbsHarmonicRegularization):
+    p0 = reg.p0
+
+    def cost(errors, ps):
+        r = sum_squares(np.maximum(0, np.abs(ps) - p0))
+        return (sum_squares(errors) + r) / 2
+
+    return cost
+
+
+@dispatch
 def build_cost_function(loss: Sobolev1SSE, reg: L2Regularization):
     r = reg.coeff
 
@@ -202,6 +221,18 @@ def build_cost_function(loss: Sobolev1SSE, reg: VarRegularization):
         # k = ps.size
         e, ge = errors
         return (sum_squares(e) + sum_squares(ge) + ps.var()) / 2
+
+    return cost
+
+
+@dispatch
+def build_cost_function(loss: Sobolev1SSE, reg: AbsHarmonicRegularization):
+    p0 = reg.p0
+
+    def cost(errors, ps):
+        e, ge = errors
+        r = sum_squares(np.maximum(0, np.abs(ps) - p0))
+        return (sum_squares(e) + sum_squares(ge) + r) / 2
 
     return cost
 
@@ -284,7 +315,7 @@ def build_damped_hessian(loss, reg):
 def build_damped_hessian(loss: Loss, reg: L2Regularization):
     r = reg.coeff
 
-    def dhessian(J, mu):
+    def dhessian(J, mu, ps):
         H = J.T @ J
         i = np.diag_indices_from(H)
         return H.at[i].add(r + mu)
@@ -295,7 +326,7 @@ def build_damped_hessian(loss: Loss, reg: L2Regularization):
 @dispatch
 def build_damped_hessian(loss: Loss, reg: VarRegularization):
 
-    def dhessian(J, mu):
+    def dhessian(J, mu, ps):
         H = J.T @ J
         k = H.shape[0]
         i = np.diag_indices_from(H)
@@ -305,10 +336,22 @@ def build_damped_hessian(loss: Loss, reg: VarRegularization):
 
 
 @dispatch
+def build_damped_hessian(loss: Loss, reg: AbsHarmonicRegularization):
+    p0 = reg.p0
+
+    def dhessian(J, mu, ps):
+        H = J.T @ J
+        i = np.diag_indices_from(H)
+        return H.at[i].add(mu + np.abs(ps) > p0)
+
+    return dhessian
+
+
+@dispatch
 def build_damped_hessian(loss: Sobolev1Loss, reg: L2Regularization):
     r = reg.coeff
 
-    def dhessian(jacs, mu):
+    def dhessian(jacs, mu, ps):
         J, gJ = jacs
         H = J.T @ J + gJ.T @ gJ
         i = np.diag_indices_from(H)
@@ -320,12 +363,25 @@ def build_damped_hessian(loss: Sobolev1Loss, reg: L2Regularization):
 @dispatch
 def build_damped_hessian(loss: Sobolev1Loss, reg: VarRegularization):
 
-    def dhessian(jacs, mu):
+    def dhessian(jacs, mu, ps):
         J, gJ = jacs
         H = J.T @ J + gJ.T @ gJ
         k = H.shape[0]
         i = np.diag_indices_from(H)
         return H.at[i].add((1 - 1 / k)**2 / k + mu)
+
+    return dhessian
+
+
+@dispatch
+def build_damped_hessian(loss: Sobolev1Loss, reg: AbsHarmonicRegularization):
+    p0 = reg.p0
+
+    def dhessian(jacs, mu, ps):
+        J, gJ = jacs
+        H = J.T @ J + gJ.T @ gJ
+        i = np.diag_indices_from(H)
+        return H.at[i].add(mu + np.abs(ps) > p0)
 
     return dhessian
 
@@ -360,6 +416,16 @@ def build_jac_err_prod(loss: Loss, reg: VarRegularization):
 
 
 @dispatch
+def build_jac_err_prod(loss: Loss, reg: AbsHarmonicRegularization):
+    p0 = reg.p0
+
+    def jep(J, e, ps):
+        return J.T @ e + np.maximum(0, np.abs(ps) - p0) * np.sign(ps)
+
+    return jep
+
+
+@dispatch
 def build_jac_err_prod(loss: Sobolev1Loss, reg: L2Regularization):
     r = reg.coeff
 
@@ -379,6 +445,18 @@ def build_jac_err_prod(loss: Sobolev1Loss, reg: VarRegularization):
         J, gJ = jacs
         e, ge = errors
         return J.T @ e + gJ.T @ ge + (1 - 1 / k) / k * (ps - ps.mean())
+
+    return jep
+
+
+@dispatch
+def build_jac_err_prod(loss: Sobolev1Loss, reg: AbsHarmonicRegularization):
+    p0 = reg.p0
+
+    def jep(jacs, errors, ps):
+        J, gJ = jacs
+        e, ge = errors
+        return J.T @ e + gJ.T @ ge + np.maximum(0, np.abs(ps) - p0) * np.sign(ps)
 
     return jep
 

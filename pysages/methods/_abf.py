@@ -31,7 +31,7 @@ class ABF(GriddedSamplingMethod):
     snapshot_flags = {"positions", "indices", "momenta"}
 
     def build(self, snapshot, helpers):
-        self.N = np.asarray(self.kwargs.get("N", 200))
+        self.N = np.asarray(self.kwargs.get("N", 500))
         self.k = self.kwargs.get("k", None)
         self.external_force = self.kwargs.get("external_force", lambda rs: 0)
         return _abf(self, snapshot, helpers)

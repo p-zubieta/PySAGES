@@ -71,10 +71,10 @@ def collect_exponents(grid):
         raise ValueError("Only 1D and 2D grids are supported")
     #
     if grid.is_periodic:
-        r = grid.shape.sum() / 4
+        r = grid.shape.sum() / 2
     else:
         r = np.square(grid.shape).sum() / 16
-    n = int(np.floor(np.sqrt(r))) + 1
+    n = int(np.ceil(np.sqrt(r)))
     r = float(r)
     #
     if grid.shape.size == 1:
@@ -222,13 +222,13 @@ def build_fitter(model: SpectralGradientFit):
 
     if model.is_periodic:
         def fit(dy):
-            std = dy.std(axis = axes)
+            std = dy.std(axis = axes).max()
             std = np.where(std == 0, 1, std)
             dy = (dy - dy.mean(axis = axes)) / std
             return Fun(std, model.pinv @ dy.flatten(), np.array(0.0))
     else:
         def fit(dy):
-            std = dy.std(axis = axes)
+            std = dy.std(axis = axes).max()
             std = np.where(std == 0, 1, std)
             dy = dy / std
             return Fun(std, model.pinv @ dy.flatten(), np.array(0.0))

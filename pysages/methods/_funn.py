@@ -58,8 +58,9 @@ class FUNN(NNSamplingMethod):
             return model(ins, outs, topology, **model_kwargs, **kwargs)
 
         self.build_model = build_model
+        max_iters = self.kwargs.get("max_iters", 100 if model is Siren else 500)
         self.optimizer = self.kwargs.get("optimzer", LevenbergMarquardt(
-            loss = GradientsSSE(), reg = L2Regularization(1e-4)
+            loss = GradientsSSE(), max_iters = max_iters, reg = L2Regularization(1e-4)
         ))
         self.external_force = self.kwargs.get("external_force", lambda rs: 0)
 

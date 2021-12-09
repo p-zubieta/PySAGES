@@ -7,8 +7,8 @@ from itertools import chain
 
 from jax import numpy as np
 
-from pysages.utils import register_pytree_namedtuple, try_import
 from pysages.nn.utils import rng_key
+from pysages.utils import register_pytree_namedtuple, try_import
 
 stax = try_import("jax.example_libraries.stax", "jax.experimental.stax")
 

@@ -12,9 +12,12 @@ from plum import dispatch
 
 from pysages.ml.models import MLP, Siren
 from pysages.ml.objectives import (
+    GradientsSSE,
     Sobolev1SSE,
+    # SSE,
+    # AbsHarmonicRegularization,
     L2Regularization,
-    # VarRegularization,
+    VarRegularization,
 )
 from pysages.ml.optimizers import (
     LevenbergMarquardt,
@@ -42,6 +45,7 @@ class CFFState(NamedTuple):
     Wp_:   JaxArray
     xi:    JaxArray
     nn:    NNData
+    sweep: Int
     nstep: Int
 
     def __repr__(self):
@@ -65,7 +69,7 @@ class CFF(NNSamplingMethod):
             raise ValueError("The value of kT must be provided")
 
         self.kT = self.kwargs["kT"]
-        self.N = np.asarray(self.kwargs.get("N", 100))
+        self.N = np.asarray(self.kwargs.get("N", 200))
         self.k = self.kwargs.get("k", None)
         self.train_freq = self.kwargs.get("train_freq", 5000)
         model = self.kwargs.get("model", MLP)
@@ -75,10 +79,18 @@ class CFF(NNSamplingMethod):
             return model(ins, outs, topology, **model_kwargs, **kwargs)
 
         self.build_model = build_model
-        # reg = VarRegularization() if model is Siren else L2Regularization(0.0)
-        reg = L2Regularization(0.0 if model is Siren else 1e-4)
-        max_iters = 250 if model is Siren else 500
-        self.optimizer = self.kwargs.get("optimizer", LevenbergMarquardt(
+        reg = VarRegularization() if model is Siren else L2Regularization(1e-4)
+        # k = len(self.topology) + 1
+        # n = np.sqrt(self.grid.shape.sum()) / 2 - 1
+        # reg = AbsHarmonicRegularization(np.float32(2**(n / k)))
+        max_iters = self.kwargs.get("max_iters", 100 if model is Siren else 500)
+        # self.optimizer = self.kwargs.get("optimizer", LevenbergMarquardt(
+        #     loss = SSE(), max_iters = max_iters, reg = reg
+        # ))
+        self.goptimizer = self.kwargs.get("goptimizer", LevenbergMarquardt(
+            loss = GradientsSSE(), max_iters = max_iters, reg = reg
+        ))
+        self.coptimizer = self.kwargs.get("coptimizer", LevenbergMarquardt(
             loss = Sobolev1SSE(), max_iters = max_iters, reg = reg
         ))
 
@@ -99,7 +111,7 @@ def _cff(method: CFF, snapshot, helpers):
     gshape = grid.shape if dims > 1 else (*grid.shape, 1)
     # Neural network and optimizer
     scale = partial(_scale, grid = grid)
-    model = method.build_model(dims, dims, method.topology, transform = scale)
+    model = method.build_model(dims, 1, method.topology, transform = scale)
     method.model = model
     ps, _ = unpack(model.parameters)
     # Helper methods
@@ -118,9 +130,9 @@ def _cff(method: CFF, snapshot, helpers):
         F = np.zeros(dims)
         Wp = np.zeros(dims)
         Wp_ = np.zeros(dims)
-        nn = NNData(ps, np.zeros(dims), np.array(1.0))
+        nn = NNData(ps, np.array(0.0), np.array(1.0))
         xi, _ = cv(helpers.query(snapshot))
-        return CFFState(bias, hist, histp, A, prob, Fsum, F, Wp, Wp_, xi, nn, 1)
+        return CFFState(bias, hist, histp, A, prob, Fsum, F, Wp, Wp_, xi, nn, 0, 1)
 
     def update(state, data):
         # During the intial stage, when there are not enough collected samples, use ABF
@@ -128,10 +140,10 @@ def _cff(method: CFF, snapshot, helpers):
         use_abf = nstep <= 1 * train_freq
         #
         # Estimate free energy / train NN
-        histp, A, prob, nn = cond(
+        histp, A, prob, nn, sweep = cond(
             (nstep % train_freq == 1) & ~use_abf,
             learn_pmf,
-            lambda state: (state.histp, state.A, state.prob, state.nn),
+            lambda state: (state.histp, state.A, state.prob, state.nn, state.sweep),
             state,
         )
         # Compute the collective variable and its jacobian
@@ -151,7 +163,7 @@ def _cff(method: CFF, snapshot, helpers):
         bias = bias + external_force(data)
         #
         return CFFState(
-            bias, hist, histp, A, prob, Fsum, F, Wp, state.Wp, xi, nn, nstep + 1
+            bias, hist, histp, A, prob, Fsum, F, Wp, state.Wp, xi, nn, sweep, nstep + 1
         )
 
     return snapshot, initialize, generalize(update, helpers)
@@ -161,7 +173,9 @@ def build_pmf_learner(method: CFF):
     # N = method.N
     kT = method.kT
     grid = method.grid
-    optimizer = method.optimizer
+    # optimizer = method.optimizer
+    coptimizer = method.coptimizer
+    goptimizer = method.goptimizer
     model = method.model
 
     dims = grid.shape.size
@@ -181,20 +195,29 @@ def build_pmf_learner(method: CFF):
 
     preprocess = partial(_preprocess, smooth if dims > 1 else vsmooth, vsmooth)
     # preprocess = (lambda y, dy: (y, dy, 1.0))
-    fit = build_fitting_function(model, optimizer)
+    # fit = build_fitting_function(model, optimizer)
+    cfit = build_fitting_function(model, coptimizer)
+    gfit = build_fitting_function(model, goptimizer)
 
-    def train(nn, data):
+    def train(nn, sweep, data):
         y, dy, s = preprocess(*data)
-        params = fit(nn.params, inputs, (y, dy)).params
+        params = cond(
+            # sweep > 12 * dims**2,
+            sweep < 0,
+            lambda data: gfit(nn.params, inputs, data[1]).params,
+            lambda data: cfit(nn.params, inputs, data).params,
+            (y, dy)
+        )
         return NNData(params, nn.mean, s)
 
     def learn_pmf(state):
         prob = state.prob + state.histp * np.exp(state.A / kT)
         A = kT * np.log(np.maximum(1, prob))
+        # A = state.A + kT * np.log(state.histp + 1)
         F = state.Fsum / np.maximum(1, state.hist.reshape(shape))
         #
         # Should we reset the model parameters before training?
-        nn = train(state.nn, (A, F))
+        nn = train(state.nn, state.sweep, (A, F))
         #
         params = pack(nn.params, layout)
         A = nn.std * model.apply(params, inputs).reshape(A.shape)
@@ -202,7 +225,7 @@ def build_pmf_learner(method: CFF):
         #
         histp = np.zeros_like(state.histp)
         #
-        return histp, A, prob, nn
+        return histp, A, prob, nn, state.sweep + 1
 
     return learn_pmf
 
@@ -220,6 +243,7 @@ def _preprocess(smooth, smooth_grad, A, F):
     F = F * (Fstd / F.std(axis = axes) / s)
     # A = A / s
     # F = F / s
+    # return np.float32(A), np.float32(F), s
     return A, F, s
 
 
