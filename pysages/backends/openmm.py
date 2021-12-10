@@ -43,12 +43,12 @@ class Sampler:
 
 def build_updater(self, callback):
     if callback:
-        def update():
+        def update(timestep):
             self.state = self.update_state(self.snapshot, self.state)
             self.bias(self.snapshot, self.state)
-            callback(self.snapshot, self.state)
+            callback(self.snapshot, self.state, timestep)
     else:
-        def update():
+        def update(timestep):
             self.state = self.update_state(self.snapshot, self.state)
             self.bias(self.snapshot, self.state)
 

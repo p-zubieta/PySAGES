@@ -15,7 +15,7 @@ from pysages.ml.objectives import (
     GradientsSSE,
     Sobolev1SSE,
     # SSE,
-    # AbsHarmonicRegularization,
+    AbsHarmonicRegularization,
     L2Regularization,
     VarRegularization,
 )
@@ -79,10 +79,11 @@ class CFF(NNSamplingMethod):
             return model(ins, outs, topology, **model_kwargs, **kwargs)
 
         self.build_model = build_model
-        reg = VarRegularization() if model is Siren else L2Regularization(1e-4)
+        # reg = VarRegularization() if model is Siren else L2Regularization(1e-4)
         # k = len(self.topology) + 1
         # n = np.sqrt(self.grid.shape.sum()) / 2 - 1
         # reg = AbsHarmonicRegularization(np.float32(2**(n / k)))
+        reg = L2Regularization(1e-4)
         max_iters = self.kwargs.get("max_iters", 100 if model is Siren else 500)
         # self.optimizer = self.kwargs.get("optimizer", LevenbergMarquardt(
         #     loss = SSE(), max_iters = max_iters, reg = reg
