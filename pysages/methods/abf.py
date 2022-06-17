@@ -17,15 +17,22 @@ derivative of the product :math:`W\\cdot p` (equation 9 of reference) is approxi
 second order backward finite difference in the simulation time step.
 """
 
+from functools import partial
 from typing import NamedTuple
 
-from jax import jit, numpy as np
+from jax import jit, numpy as np, vmap
 from jax.lax import cond
 from jax.scipy import linalg
 
+from pysages.approxfun.core import compute_mesh, scale as _scale
 from pysages.grids import build_indexer
-from pysages.methods.core import GriddedSamplingMethod, generalize
+from pysages.methods.core import GriddedSamplingMethod, Result, generalize
 from pysages.methods.restraints import apply_restraints
+from pysages.ml.models import MLP, Siren
+from pysages.ml.objectives import GradientsSSE, L2Regularization
+from pysages.ml.optimizers import LevenbergMarquardt
+from pysages.ml.training import NNData, build_fitting_function, convolve
+from pysages.ml.utils import blackman_kernel, pack, unpack
 from pysages.utils import JaxArray, dispatch
 
 
@@ -36,11 +43,11 @@ class ABFState(NamedTuple):
     Parameters
     ----------
 
-    bias: JaxArray (Nparticles, 3)
-        Array with biasing forces for each particle.
-
     xi: JaxArray (CV shape)
         Last collective variable recorded in the simulation.
+
+    bias: JaxArray (Nparticles, 3)
+        Array with biasing forces for each particle.
 
     hist: JaxArray (grid.shape)
         Histogram of visits to the bins in the collective variable grid.
@@ -58,8 +65,8 @@ class ABFState(NamedTuple):
         Product of W matrix and momenta matrix for the previous step.
     """
 
-    bias: JaxArray
     xi: JaxArray
+    bias: JaxArray
     hist: JaxArray
     Fsum: JaxArray
     force: JaxArray
@@ -165,13 +172,14 @@ def _abf(method, snapshot, helpers):
         ABFState
             Initialized State
         """
+        xi, _ = cv(helpers.query(snapshot))
         bias = np.zeros((natoms, 3))
         hist = np.zeros(grid.shape, dtype=np.uint32)
         Fsum = np.zeros((*grid.shape, dims))
         force = np.zeros(dims)
         Wp = np.zeros(dims)
         Wp_ = np.zeros(dims)
-        return ABFState(bias, None, hist, Fsum, force, Wp, Wp_)
+        return ABFState(xi, bias, hist, Fsum, force, Wp, Wp_)
 
     def update(state, data):
         """
@@ -210,7 +218,7 @@ def _abf(method, snapshot, helpers):
         force = estimate_force(xi, I_xi, Fsum, hist).reshape(dims)
         bias = np.reshape(-Jxi.T @ force, state.bias.shape)
 
-        return ABFState(bias, xi, hist, Fsum, force, Wp, state.Wp)
+        return ABFState(xi, bias, hist, Fsum, force, Wp, state.Wp)
 
     return snapshot, initialize, generalize(update, helpers)
 
@@ -244,3 +252,97 @@ def build_force_estimator(method: ABF):
             return cond(ob, restraints_force, average_force, data)
 
     return estimate_force
+
+
+def analyze(result: Result[ABF], **kwargs):
+    """
+    Computes the free energy from the result of an `ABF` run.
+    Integrates the forces using Sobolev approximation of functions by gradient learning.
+
+    Parameters
+    ----------
+
+    result: Result[ABF]: Result bundle containing method,
+           final abf state, and callback.
+
+    topology: Optional[Tuple[int]] = (4, 4)
+        Defines the architecture of the neural network (number of nodes of each hidden layer).
+
+    Returns
+    -------
+
+    dict: A dictionary with the following keys:
+
+        histogram: JaxArray
+            Histogram for the states visited during the method
+
+        mean_force: JaxArray
+            Average force at each bin of the CV grid.
+
+        free_energy: JaxArray
+            Free Energy at each bin of the CV grid
+
+        mesh: JaxArray
+            Grid used in the method
+
+        fes_fn: Callable[[JaxArray], JaxArray]
+            Function that allows to interpolate the free energy in the CV domain defined
+            by the grid.
+    """
+    topology = kwargs.get("topology", (4, 4))
+    method = result.method
+    state = result.states[0]
+    grid = method.grid
+
+    def _learn_forces(train, state):
+        hist = np.expand_dims(state.hist, state.hist.ndim)
+        F = state.Fsum / np.maximum(hist, 1)
+        return train(state.nn, F)
+
+    class AnalysisState(NamedTuple):
+        hist: JaxArray
+        Fsum: JaxArray
+        nn: NNData
+
+    def train_result(fit, smooth, inputs, nn, y):
+        axes = tuple(range(y.ndim - 1))
+        std = y.std(axis=axes).max()
+        reference = smooth(y / std)
+        params = fit(nn.params, inputs, reference).params
+        return NNData(params, nn.mean, std / reference.std(axis=axes).max())
+
+    model = MLP(grid.shape.size, 1, topology, transform=partial(_scale, grid=grid))
+    ps, layout = unpack(model.parameters)
+
+    optimizer = LevenbergMarquardt(loss=GradientsSSE(), max_iters=2500, reg=L2Regularization(1e-3))
+    fit = build_fitting_function(model, optimizer)
+    x = (compute_mesh(grid) + 1) * grid.size / 2 + grid.lower
+    smooth = partial(
+        convolve,
+        kernel=blackman_kernel(grid.shape.size, 7),
+        boundary="wrap" if grid.is_periodic else "edge",
+    )
+    train = jit(partial(train_result, fit, lambda y: vmap(smooth)(y.T).T, x))
+    learn_forces = jit(partial(_learn_forces, train))
+
+    def average_forces(state):
+        Fsum = state.Fsum
+        shape = (*Fsum.shape[:-1], 1)
+        return Fsum / np.maximum(state.hist.reshape(shape), 1)
+
+    def return_energy(state, model, ps, layout, x, grid):
+        analysis_state = AnalysisState(state.hist, state.Fsum, NNData(ps, 0.0, 1.0))
+        nn = learn_forces(analysis_state)
+        A = nn.std * model.apply(pack(nn.params, layout), x) + nn.mean
+        A = (A.max() - A).reshape(grid.shape)
+        return A
+
+    fes_fn = jit(lambda x: return_energy(state, model, ps, layout, x, grid))
+
+    return dict(
+        histogram=state.hist,
+        mean_force=average_forces(state),
+        free_energy=fes_fn(x),
+        mesh=x,
+        fes_fn=fes_fn,
+    )
