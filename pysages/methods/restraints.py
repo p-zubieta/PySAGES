@@ -45,7 +45,7 @@ def canonicalize(*_):
 
 
 @dispatch
-def canonicalize(restraints: CVRestraints, cvs):  # pylint: disable=C0116,E0102
+def canonicalize(restraints: CVRestraints, cvs):  # noqa: F811 # pylint: disable=C0116,E0102
     lower, upper, kl, ku = restraints
     if len(lower) != len(upper) != len(kl) != len(ku) != len(cvs):
         raise ValueError("The number of restraints must equal the number of CVs.")
@@ -57,7 +57,7 @@ def canonicalize(restraints: CVRestraints, cvs):  # pylint: disable=C0116,E0102
 
 
 @dispatch
-def canonicalize(restraints: type(None), _):  # pylint: disable=C0116,E0102
+def canonicalize(restraints: type(None), _):  # noqa: F811 # pylint: disable=C0116,E0102
     return restraints
 
 
