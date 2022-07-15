@@ -187,7 +187,7 @@ def vandergrad_builder(grid, exponents):
 
         def expand(x):
             z = x ** (np.maximum(ns - 1, 0))
-            return flip_multiply(s * ns * z, x).T
+            return flip_multiply(s * ns * z, z).T
 
     return jit(lambda xs: vmap(expand)(xs).reshape(-1, np.size(ns, 0)))
 
