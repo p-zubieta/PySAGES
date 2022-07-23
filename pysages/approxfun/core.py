@@ -9,8 +9,9 @@ from itertools import product
 from typing import NamedTuple
 
 from jax import jit, numpy as np, vmap
+from plum import type_parameter
 
-from pysages.grids import Grid, Chebyshev
+from pysages.grids import Grid, Chebyshev, Periodic
 from pysages.utils import Float, JaxArray, dispatch
 
 
@@ -49,6 +50,15 @@ class AbstractFit(ABC):
     @property
     def is_periodic(self):
         return self.grid.is_periodic
+
+
+class SpectralFit(AbstractFit):
+    """
+    Specialization of AbstractFit used when the target values directly
+    correspond to the function of interest.
+    """
+
+    pass
 
 
 class SpectralGradientFit(AbstractFit):
@@ -193,7 +203,20 @@ def vandergrad_builder(grid, exponents):
 
 
 @dispatch
-def pinv(model: SpectralGradientFit):
+def pinv(model: SpectralFit):
+    A = vander_builder(model.grid, model.exponents)(model.mesh)
+    Y = np.ones((np.size(A, 0), 1))
+
+    if model.is_periodic:
+        U = np.hstack((Y, np.real(A), np.imag(A)))
+    else:
+        U = np.hstack((Y, A))
+
+    return np.linalg.pinv(U)
+
+
+@dispatch
+def pinv(model: SpectralGradientFit):  # noqa: F811 # pylint: disable=C0116,E0102
     A = vandergrad_builder(model.grid, model.exponents)(model.mesh)
 
     if model.is_periodic:
@@ -221,7 +244,26 @@ def pinv(model: SpectralSobolev1Fit):  # noqa: F811 # pylint: disable=C0116,E010
 
 
 @dispatch
-def build_fitter(model: SpectralGradientFit):
+def build_fitter(model: SpectralFit):
+    """
+    Returns a function which takes approximations `y` to a function `f`
+    evaluated over the set `x = compute_mesh(model.grid)`, which in turn
+    returns a `fun: Fun` object which approximates `f` over the domain [-1, 1]ⁿ.
+    """
+
+    def fit(y):
+        mean = y.mean()
+        std = y.std()
+        std = np.where(std == 0, 1, std)
+        y = (y - mean) / std
+        cs = model.pinv @ y.flatten()
+        return Fun(std, cs[1:], cs[0] + mean / std)
+
+    return jit(fit)
+
+
+@dispatch
+def build_fitter(model: SpectralGradientFit):  # noqa: F811 # pylint: disable=C0116,E0102
     """
     Returns a function which takes an approximation `dy` to the gradient
     of a function `f` evaluated over the set `x = compute_mesh(model.grid)`,
@@ -277,10 +319,12 @@ def build_evaluator(model):
     by `model`. The returned method takes a `fun` and a value (or array of
     values) `x` to evaluate the approximant.
     """
+    T = type_parameter(model.grid)
+
     transform = partial(scale, grid=model.grid)
     vander = vander_builder(model.grid, model.exponents)
 
-    if model.is_periodic:
+    if T is Periodic:
 
         def restack(x):
             return np.hstack((np.real(x), np.imag(x)))
