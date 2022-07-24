@@ -4,14 +4,13 @@
 
 from abc import ABC
 from dataclasses import dataclass
-from functools import partial
 from itertools import product
 from typing import NamedTuple
 
 from jax import jit, numpy as np, vmap
 from plum import type_parameter
 
-from pysages.grids import Grid, Chebyshev, Periodic
+from pysages.grids import Grid, Chebyshev, Periodic, Regular, convert
 from pysages.utils import Float, JaxArray, dispatch
 
 
@@ -41,9 +40,10 @@ class AbstractFit(ABC):
     exponents: JaxArray
 
     def __init__(self, grid: Grid):
+        T = type_parameter(grid)
         ns = collect_exponents(grid)
         self.grid = grid
-        self.mesh = compute_mesh(grid)
+        self.mesh = compute_mesh(convert(grid, Grid[Chebyshev]) if T is Regular else grid)
         self.exponents = ns
         self.pinv = pinv(self)
 
@@ -321,18 +321,17 @@ def build_evaluator(model):
     """
     T = type_parameter(model.grid)
 
-    transform = partial(scale, grid=model.grid)
-    vander = vander_builder(model.grid, model.exponents)
+    if T is Regular:
+        transform = jit(lambda x: np.sin(np.pi * (scale(x, model.grid) / 2)))
+    else:
+        transform = jit(lambda x: scale(x, model.grid))
 
     if T is Periodic:
-
-        def restack(x):
-            return np.hstack((np.real(x), np.imag(x)))
-
+        restack = jit(lambda x: np.hstack((np.real(x), np.imag(x))))
     else:
+        restack = jit(lambda x: x)
 
-        def restack(x):
-            return x
+    vander = vander_builder(model.grid, model.exponents)
 
     def evaluate(f: Fun, x):
         c0 = f.c0
@@ -350,23 +349,27 @@ def build_grad_evaluator(model):
     expansion defined by `model`. The returned method takes a `fun` and a value
     (or array of values) `x` to evaluate the approximant.
     """
-    transform = partial(scale, grid=model.grid)
-    vandergrad = vandergrad_builder(model.grid, model.exponents)
+    T = type_parameter(model.grid)
 
-    if model.is_periodic:
-
-        def restack(x):
-            return np.hstack((np.imag(x), np.real(x)))
-
+    if T is Regular:
+        transform = jit(lambda x: np.sin(np.pi * (scale(x, model.grid) / 2)))
+        prefactor = jit(lambda x: np.pi / model.grid.size * np.sqrt(1 - x**2))
     else:
+        transform = jit(lambda x: scale(x, model.grid))
+        prefactor = jit(lambda x: 1)
 
-        def restack(x):
-            return x
+    if T is Periodic:
+        restack = jit(lambda x: np.hstack((np.real(x), np.imag(x))))
+    else:
+        restack = jit(lambda x: x)
+
+    vandergrad = vandergrad_builder(model.grid, model.exponents)
 
     def get_gradient(f: Fun, x):
         cs = f.coefficients
         x = transform(np.array(x, ndmin=2))
+        a = prefactor(x)
         y = f.scale * (restack(vandergrad(x)) @ cs)
-        return y.reshape(x.shape)
+        return a.reshape(x.shape) * y.reshape(x.shape)
 
     return jit(get_gradient)
