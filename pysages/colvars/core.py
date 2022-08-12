@@ -8,10 +8,11 @@ Abstract base classes for collective variables.
 """
 
 from abc import ABC, abstractmethod
-from inspect import signature
+from inspect import isabstract, signature
 from typing import Callable, Sequence, Tuple, Union
 
 from jax import grad as jax_grad, jit, numpy as np
+from plum import parametric
 import numpy
 
 from pysages.utils import JaxArray, dispatch
@@ -133,6 +134,24 @@ class FourPointCV(CollectiveVariable):
 
     def __init__(self, indices):
         super().__init__(indices, 4)
+
+    @property
+    @abstractmethod
+    def function(self):
+        pass
+
+
+@parametric
+class MultiComponentCV(CollectiveVariable):
+    def __init__(self, indices, *args, **kwargs):  # pylint: disable=super-init-not-called
+        T = self.__get_type_parameter__()
+        T.__init__(self, indices, *args, **kwargs)
+
+    def __get_type_parameter__(self):
+        T = getattr(self, "_type_parameter", CollectiveVariable)
+        if not (issubclass(type(T), type) and issubclass(T, CollectiveVariable) and isabstract(T)):
+            raise TypeError("Type parameter must be a concrete subclass of CollectiveVariable")
+        return T
 
     @property
     @abstractmethod
