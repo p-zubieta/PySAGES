@@ -21,7 +21,7 @@ def view(array: DeviceArray):
 
 
 @dispatch
-def view(array: numpy.ndarray):
+def view(array: numpy.ndarray):  # noqa: F811 # pylint: disable=C0116,E0102
     """Return a writable view of a numpy.ndarray."""
     ptype = ctypes.POINTER(as_ctypes_type(array.dtype))
     addr = array.__array_interface__["data"][0]
