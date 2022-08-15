@@ -8,18 +8,16 @@ Abstract base classes for collective variables.
 """
 
 from abc import ABC, abstractmethod
-from inspect import isabstract, signature
+from inspect import signature
 from typing import Callable, Sequence, Tuple, Union
 
-from jax import grad, jacrev, jit, numpy as np
-from plum import parametric
+from jax import grad as jax_grad, jit, numpy as np
 import numpy
 
 from pysages.utils import JaxArray, dispatch
 
 
 UInt32 = np.uint32
-Index = Union[numpy.intp, numpy.int_, numpy.intc, int]
 Indices = Union[numpy.intp, numpy.int_, numpy.intc, int, range]
 
 
@@ -142,24 +140,6 @@ class FourPointCV(CollectiveVariable):
         pass
 
 
-@parametric
-class MultiComponentCV(CollectiveVariable):
-    def __init__(self, indices, *args, **kwargs):  # pylint: disable=super-init-not-called
-        T = self.__get_type_parameter__()
-        T.__init__(self, indices, *args, **kwargs)
-
-    def __get_type_parameter__(self):
-        T = getattr(self, "_type_parameter", CollectiveVariable)
-        if not (issubclass(type(T), type) and issubclass(T, CollectiveVariable) and isabstract(T)):
-            raise TypeError("Type parameter must be a concrete subclass of CollectiveVariable")
-        return T
-
-    @property
-    @abstractmethod
-    def function(self):
-        pass
-
-
 # ========= #
 #   Utils   #
 # ========= #
@@ -177,7 +157,7 @@ def _get_nargs(function: Callable):
     return len(signature(function).parameters)
 
 
-def _build(cv: CollectiveVariable, diff: bool = True):
+def _build(cv: CollectiveVariable, grad=jax_grad):
     # TODO: Add support for compute weights from masses # pylint:disable=fixme
     xi = cv.function
     idx = cv.indices
@@ -202,26 +182,26 @@ def _build(cv: CollectiveVariable, diff: bool = True):
             pos = [pos[g] for g in gps]
             return np.asarray(xi(*pos, **kwargs))
 
-    cv_fn = jit(evaluate)
+    function = jit(evaluate)
 
-    if diff:
-        diff_op = _diff_op(cv)
-        cv_grad = jit(diff_op(evaluate))
+    if grad is None:
 
         def apply(pos: JaxArray, ids: JaxArray, **kwargs):
-            xi = cv_fn(pos, ids, **kwargs).reshape(1, -1)
-            Jxi = cv_grad(pos, ids, **kwargs).reshape(xi.shape[-1], -1)
-            return xi, Jxi
+            return np.expand_dims(function(pos, ids, **kwargs).flatten(), 0)
 
     else:
 
+        gradient = jit(grad(evaluate))
+
         def apply(pos: JaxArray, ids: JaxArray, **kwargs):
-            return cv_fn(pos, ids, **kwargs).reshape(1, -1)
+            xi = np.expand_dims(function(pos, ids, **kwargs).flatten(), 0)
+            Jxi = np.expand_dims(gradient(pos, ids, **kwargs).flatten(), 0)
+            return xi, Jxi
 
     return jit(apply)
 
 
-def build(cv: CollectiveVariable, *cvs: CollectiveVariable, diff: bool = True):
+def build(cv: CollectiveVariable, *cvs: CollectiveVariable, grad=jax_grad):
     """
     Jit compile and stack collective variables.
 
@@ -231,19 +211,28 @@ def build(cv: CollectiveVariable, *cvs: CollectiveVariable, diff: bool = True):
         Collective Variable object to jit compile.
     cvs: list[CollectiveVariable]
         Sequence of Collective variables that get stacked on top of each other.
-    diff: bool = True
-        Indicates whether to differentiate the collective variables.
+    grad: Optional[Callable]
+        Jax transform that is used to compute the gradient, if `None` is
+        provided, only the collective variables will be computed.
+        Defaults to `jax.grad`.
 
     Returns
     -------
     Callable[Snapshot]
         Jit compiled function, that takes a snapshot object, and access its
         positions and indices. With this information the collective variables
-        (and their derivatives if `differentiate` is `True`) are computed and returned.
+        (and their gradients if `grad is not None`) are computed and returned.
     """
-    cvs = [_build(cv, diff=diff)] + [_build(cv, diff=diff) for cv in cvs]
+    cvs = [_build(cv, grad=grad)] + [_build(cv, grad=grad) for cv in cvs]
 
-    if diff:
+    if grad is None:
+
+        def apply(data):
+            pos = data.positions[:, :3]
+            ids = data.indices
+            return np.hstack([cv(pos, ids) for cv in cvs])
+
+    else:
 
         def apply(data):
             pos = data.positions[:, :3]
@@ -256,13 +245,6 @@ def build(cv: CollectiveVariable, *cvs: CollectiveVariable, diff: bool = True):
                 xis_grads.append(Jxi)
 
             return np.hstack(xis), np.vstack(xis_grads)
-
-    else:
-
-        def apply(data):
-            pos = data.positions[:, :3]
-            ids = data.indices
-            return np.hstack([cv(pos, ids) for cv in cvs])
 
     return jit(apply)
 
@@ -289,16 +271,6 @@ def _process_groups(indices: Union[Sequence, Tuple]):
 
 
 @dispatch
-def _diff_op(cv: CollectiveVariable):  # pylint:disable=unused-argument
-    return grad
-
-
-@dispatch
-def _diff_op(cv: MultiComponentCV):  # pylint:disable=unused-argument
-    return jacrev
-
-
-@dispatch
 def _is_group(indices: Indices):  # pylint:disable=unused-argument
     return False
 
@@ -314,7 +286,9 @@ def _is_group(obj):
 
 
 @dispatch
-def _group_size(obj: Index):  # pylint:disable=unused-argument
+def _group_size(
+    obj: Union[numpy.intp, numpy.intc, numpy.int_, int]
+):  # pylint:disable=unused-argument
     return 1
 
 
