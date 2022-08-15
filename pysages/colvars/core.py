@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from inspect import isabstract, signature
 from typing import Callable, Sequence, Tuple, Union
 
-from jax import grad as jax_grad, jit, numpy as np
+from jax import grad, jacrev, jit, numpy as np
 from plum import parametric
 import numpy
 
@@ -19,6 +19,7 @@ from pysages.utils import JaxArray, dispatch
 
 
 UInt32 = np.uint32
+Index = Union[numpy.intp, numpy.int_, numpy.intc, int]
 Indices = Union[numpy.intp, numpy.int_, numpy.intc, int, range]
 
 
@@ -182,7 +183,7 @@ def _get_nargs(function: Callable):
     return len(signature(function).parameters)
 
 
-def _build(cv: CollectiveVariable, grad=jax_grad):
+def _build(cv: CollectiveVariable, diff: bool = True):
     # TODO: Add support for compute weights from masses # pylint:disable=fixme
     xi = cv.function
     idx = cv.indices
@@ -207,26 +208,26 @@ def _build(cv: CollectiveVariable, grad=jax_grad):
             pos = [pos[g] for g in gps]
             return np.asarray(xi(*pos, **kwargs))
 
-    function = jit(evaluate)
+    cv_fn = jit(evaluate)
 
-    if grad is None:
+    if diff:
+        diff_op = _diff_op(cv)
+        cv_grad = jit(diff_op(evaluate))
 
         def apply(pos: JaxArray, ids: JaxArray, **kwargs):
-            return np.expand_dims(function(pos, ids, **kwargs).flatten(), 0)
+            xi = cv_fn(pos, ids, **kwargs).reshape(1, -1)
+            Jxi = cv_grad(pos, ids, **kwargs).reshape(xi.shape[-1], -1)
+            return xi, Jxi
 
     else:
 
-        gradient = jit(grad(evaluate))
-
         def apply(pos: JaxArray, ids: JaxArray, **kwargs):
-            xi = np.expand_dims(function(pos, ids, **kwargs).flatten(), 0)
-            Jxi = np.expand_dims(gradient(pos, ids, **kwargs).flatten(), 0)
-            return xi, Jxi
+            return cv_fn(pos, ids, **kwargs).reshape(1, -1)
 
     return jit(apply)
 
 
-def build(cv: CollectiveVariable, *cvs: CollectiveVariable, grad=jax_grad):
+def build(cv: CollectiveVariable, *cvs: CollectiveVariable, diff: bool = True):
     """
     Jit compile and stack collective variables.
 
@@ -236,28 +237,19 @@ def build(cv: CollectiveVariable, *cvs: CollectiveVariable, grad=jax_grad):
         Collective Variable object to jit compile.
     cvs: list[CollectiveVariable]
         Sequence of Collective variables that get stacked on top of each other.
-    grad: Optional[Callable]
-        Jax transform that is used to compute the gradient, if `None` is
-        provided, only the collective variables will be computed.
-        Defaults to `jax.grad`.
+    diff: bool = True
+        Indicates whether to differentiate the collective variables.
 
     Returns
     -------
     Callable[Snapshot]
         Jit compiled function, that takes a snapshot object, and access its
         positions and indices. With this information the collective variables
-        (and their gradients if `grad is not None`) are computed and returned.
+        (and their derivatives if `differentiate` is `True`) are computed and returned.
     """
-    cvs = [_build(cv, grad=grad)] + [_build(cv, grad=grad) for cv in cvs]
+    cvs = [_build(cv, diff=diff)] + [_build(cv, diff=diff) for cv in cvs]
 
-    if grad is None:
-
-        def apply(data):
-            pos = data.positions[:, :3]
-            ids = data.indices
-            return np.hstack([cv(pos, ids) for cv in cvs])
-
-    else:
+    if diff:
 
         def apply(data):
             pos = data.positions[:, :3]
@@ -270,6 +262,13 @@ def build(cv: CollectiveVariable, *cvs: CollectiveVariable, grad=jax_grad):
                 xis_grads.append(Jxi)
 
             return np.hstack(xis), np.vstack(xis_grads)
+
+    else:
+
+        def apply(data):
+            pos = data.positions[:, :3]
+            ids = data.indices
+            return np.hstack([cv(pos, ids) for cv in cvs])
 
     return jit(apply)
 
@@ -296,6 +295,16 @@ def _process_groups(indices: Union[Sequence, Tuple]):
 
 
 @dispatch
+def _diff_op(cv: CollectiveVariable):  # pylint:disable=unused-argument
+    return grad
+
+
+@dispatch
+def _diff_op(cv: MultiComponentCV):  # pylint:disable=unused-argument
+    return jacrev
+
+
+@dispatch
 def _is_group(indices: Indices):  # pylint:disable=unused-argument
     return False
 
@@ -311,9 +320,7 @@ def _is_group(obj):
 
 
 @dispatch
-def _group_size(
-    obj: Union[numpy.intp, numpy.intc, numpy.int_, int]
-):  # pylint:disable=unused-argument
+def _group_size(obj: Index):  # pylint:disable=unused-argument
     return 1
 
 
