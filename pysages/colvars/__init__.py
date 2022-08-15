@@ -29,6 +29,10 @@ from .coordinates import (
     Distance,
 )
 
+from .multid_coordinates import (
+    DistanceComponents
+)
+
 from .utils import (
     get_periods,
     wrap,
