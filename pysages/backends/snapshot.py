@@ -5,8 +5,9 @@
 from typing import Callable, NamedTuple, Optional, Tuple, Union
 
 from jax import jit, numpy as np
+from jaxlib.xla_extension import DeviceArray as JaxArray
 
-from pysages.utils import JaxArray, copy, dispatch
+from pysages.utils import copy, dispatch, identity
 
 
 class Box(
@@ -59,12 +60,12 @@ class HelperMethods(NamedTuple):
 
 
 @dispatch(precedence=1)
-def copy(s: Box, *args):  # noqa: F811 # pylint: disable=C0116,E0102
+def copy(s: Box, *args):
     return Box(*(copy(x, *args) for x in s))
 
 
 @dispatch(precedence=1)
-def copy(s: Snapshot, *args):  # noqa: F811 # pylint: disable=C0116,E0102
+def copy(s: Snapshot, *args):
     return Snapshot(*(copy(x, *args) for x in s))
 
 

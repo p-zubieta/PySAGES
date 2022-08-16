@@ -10,7 +10,7 @@ import numpy
 
 from jax import numpy as np
 from jax.tree_util import register_pytree_node
-from plum import Dispatcher, parametric, type_of
+from plum import Dispatcher
 
 import jaxlib.xla_extension as xe
 
@@ -19,29 +19,15 @@ import jaxlib.xla_extension as xe
 dispatch = Dispatcher()
 
 
-class ToCPU:
-    pass
-
-
-@parametric(runtime_type_of=True)
-class JaxArray(xe.DeviceArrayBase):
-    """A type for JAX's arrays where the type parameter specifies the number of
-    dimensions."""
-
-
-# Aliases
-JaxScalar = JaxArray[0]
-JaxVector = JaxArray[1]
-JaxMatrix = JaxArray[2]
-Bool = Union[JaxScalar, bool]
-Float = Union[JaxScalar, float]
-Int = Union[JaxScalar, int]
+JaxArray = xe.DeviceArray
+Bool = Union[JaxArray, bool]
+Float = Union[JaxArray, float]
+Int = Union[JaxArray, int]
 Scalar = Union[None, bool, int, float]
 
 
-@type_of.dispatch
-def type_of(x: xe.DeviceArrayBase):
-    return JaxArray[x.ndim]
+class ToCPU:
+    pass
 
 
 # - https://github.com/google/jax/issues/446
@@ -61,22 +47,22 @@ def copy(x: Scalar):
 
 
 @dispatch(precedence=1)
-def copy(t: tuple, *args):  # noqa: F811 # pylint: disable=C0116,E0102
+def copy(t: tuple, *args):
     return tuple(copy(x, *args) for x in t)
 
 
 @dispatch
-def copy(x: JaxArray):  # noqa: F811 # pylint: disable=C0116,E0102
+def copy(x: JaxArray):
     return x.copy()
 
 
 @dispatch
-def copy(x, _: ToCPU):  # noqa: F811 # pylint: disable=C0116,E0102
+def copy(x, _: ToCPU):
     return deepcopy(x)
 
 
 @dispatch
-def copy(x: JaxArray, _: ToCPU):  # noqa: F811 # pylint: disable=C0116,E0102
+def copy(x: JaxArray, _: ToCPU):
     return numpy.asarray(x._value)
 
 
