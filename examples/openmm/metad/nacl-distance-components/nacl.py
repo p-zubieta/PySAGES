@@ -39,14 +39,19 @@ kB = kB.value_in_unit(unit.kilojoules_per_mole / unit.kelvin)
 
 T = 298.15 * unit.kelvin
 dt = 2.0 * unit.femtoseconds
-adp_pdb = os.path.join(os.pardir, os.pardir, os.pardir, os.pardir, "inputs", "nacl", "nacl-explicit.pdb")
+nacl_pdb = os.path.join(
+    os.pardir, os.pardir, os.pardir, os.pardir, "inputs", "nacl", "nacl-explicit.pdb"
+)
+nacl_ff = os.path.join(
+    os.pardir, os.pardir, os.pardir, os.pardir, "inputs", "nacl", "tip3p_standard.xml"
+)
 
 
 # %%
-def generate_simulation(pdb_filename=adp_pdb, T=T, dt=dt):
+def generate_simulation(pdb_filename=nacl_pdb, T=T, dt=dt):
     pdb = app.PDBFile(pdb_filename)
 
-    ff = app.ForceField("amber/tip3p_standard.xml")
+    ff = app.ForceField(nacl_ff)
     cutoff_distance = 1.0 * unit.nanometer
     topology = pdb.topology
 
@@ -101,7 +106,7 @@ def get_args(argv):
 def main(argv=[]):
     args = get_args(argv)
 
-    cvs = [DistanceComponents([509, 510])]
+    cvs = [DistanceComponents([1524, 1525])]
 
     height = 1.2  # kJ/mol
     sigma = [0.05]  # nm
@@ -109,16 +114,13 @@ def main(argv=[]):
     stride = 500  # frequency for depositing gaussians
     timesteps = args.time_steps
     ngauss = timesteps // stride + 1  # total number of gaussians
-    
-    print(args.well_tempered)
-    print(args.log)
 
     # 1D Grid for storing bias potential and its gradient
     grid = pysages.Grid(lower=(0, 0, 0), upper=(2.5, 2.5, 2.5), shape=(50, 50, 50), periodic=True)
     grid = grid if args.use_grids else None
 
     # Method
-    method = Metadynamics(cvs, height, sigma, stride, ngauss, deltaT=deltaT, kB=kB, grid)
+    method = Metadynamics(cvs, height, sigma, stride, ngauss, deltaT=deltaT, kB=kB, grid=grid)
 
     # Logging
     hills_file = "hills.dat"
@@ -130,40 +132,42 @@ def main(argv=[]):
     print(f"Completed the simulation in {toc - tic:0.4f} seconds.")
 
     # Analysis: Calculate free energy using the deposited bias potential
-    
+
     ##### generate CV values on a grid to evaluate bias potential
     ####plot_grid = pysages.Grid(lower=(0), upper=(4), shape=(50), periodic=True)
     ####xi = (compute_mesh(plot_grid) + 1) / 2 * plot_grid.size + plot_grid.lower
     ####xi = xi.flatten()
- ####
-    ##### determine bias factor depending on method (for standard = 1 and for well-tempered = (T+deltaT)/deltaT)
-    ####alpha = (
-    ####     1
-    ####     if method.deltaT is None
-    ####     else (T.value_in_unit(unit.kelvin) + method.deltaT) / method.deltaT
-    ####)
-    ####kT = kB * T.value_in_unit(unit.kelvin)
- ####
-    # extract metapotential function from result
-    ####result = pysages.analyze(run_result)
-    ####metapotential = result["metapotential"]
- ####
-    ##### report in kT and set min free energy to zero
-    ####A = metapotential(xi) * -alpha / kT
-    ####A = A - A.min()
-    ##### entropy correction
-    ####A = A - 2*kT*numpy.log(xi)
+
+
 ####
-    ##### plot and save free energy to a PNG file
-    ####fig, ax = plt.subplots(dpi=120)
- ####
-    ####ax.plot(xi, A, lw=2, color='darkblue')
-    ####ax.set_xlabel(r"$r$")
-    ####ax.set_ylabel(r"$A~[k_{B}T]$")
-  ####
-    ####fig.savefig("nacl-fe.png", dpi=fig.dpi)
- ####
-    ####return result
+##### determine bias factor depending on method (for standard = 1 and for well-tempered = (T+deltaT)/deltaT)
+####alpha = (
+####     1
+####     if method.deltaT is None
+####     else (T.value_in_unit(unit.kelvin) + method.deltaT) / method.deltaT
+####)
+####kT = kB * T.value_in_unit(unit.kelvin)
+####
+# extract metapotential function from result
+####result = pysages.analyze(run_result)
+####metapotential = result["metapotential"]
+####
+##### report in kT and set min free energy to zero
+####A = metapotential(xi) * -alpha / kT
+####A = A - A.min()
+##### entropy correction
+####A = A - 2*kT*numpy.log(xi)
+####
+##### plot and save free energy to a PNG file
+####fig, ax = plt.subplots(dpi=120)
+####
+####ax.plot(xi, A, lw=2, color='darkblue')
+####ax.set_xlabel(r"$r$")
+####ax.set_ylabel(r"$A~[k_{B}T]$")
+####
+####fig.savefig("nacl-fe.png", dpi=fig.dpi)
+####
+####return result
 
 
 # %%

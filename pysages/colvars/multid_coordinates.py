@@ -9,13 +9,13 @@ Collective Variables that are computed from the Cartesian coordinates.
 from jax import numpy as np
 from jax.numpy import linalg
 
-from pysages.colvars.core import TwoPointCV
+from pysages.colvars.core import MultiComponentCV, TwoPointCV
 from pysages.colvars.coordinates import barycenter
 
 
 class DistanceComponents(MultiComponentCV[TwoPointCV]):
     """
-    Use the distance components along x, y, and z of atom groups 
+    Use the distance components along x, y, and z of atom groups
     selected via the indices as collective variable.
 
     Parameters
@@ -48,5 +48,5 @@ def distancecomponents(r1, r2):
     distance: float
         Distance components along each axis between the two points.
     """
-    
+
     return r1 - r2
