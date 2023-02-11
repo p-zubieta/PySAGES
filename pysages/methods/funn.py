@@ -17,9 +17,7 @@ appropriate method.
 from functools import partial
 from typing import NamedTuple, Tuple
 
-from jax import jit
 from jax import numpy as np
-from jax import vmap
 from jax.lax import cond
 
 from pysages.approxfun import compute_mesh
@@ -32,8 +30,8 @@ from pysages.methods.utils import numpyfy_vals
 from pysages.ml.models import MLP
 from pysages.ml.objectives import L2Regularization
 from pysages.ml.optimizers import LevenbergMarquardt
-from pysages.ml.training import NNData, build_fitting_function, convolve, normalize
-from pysages.ml.utils import blackman_kernel, pack, unpack
+from pysages.ml.training import NNData, build_fitting_function, normalize
+from pysages.ml.utils import kernel_smoother, pack, unpack
 from pysages.utils import Bool, Int, JaxArray, dispatch, only_or_identity, solve_pos_def
 
 
@@ -217,10 +215,7 @@ def build_free_energy_grad_learner(method: FUNN):
 
     # Training data
     inputs = (compute_mesh(grid) + 1) * grid.size / 2 + grid.lower
-    smoothing_kernel = blackman_kernel(dims, 7)
-    padding = "wrap" if grid.is_periodic else "edge"
-    conv = partial(convolve, kernel=smoothing_kernel, boundary=padding)
-    smooth = jit(lambda y: vmap(conv)(y.T).T)
+    smooth = kernel_smoother(dims, 5, grid.is_periodic)
 
     _, layout = unpack(model.parameters)
     fit = build_fitting_function(model, method.optimizer)

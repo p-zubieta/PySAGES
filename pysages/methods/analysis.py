@@ -10,7 +10,6 @@ from functools import partial
 
 from jax import jit
 from jax import numpy as np
-from jax import vmap
 
 from pysages.approxfun import compute_mesh
 from pysages.approxfun import scale as _scale
@@ -18,8 +17,8 @@ from pysages.methods.core import Result
 from pysages.ml.models import MLP
 from pysages.ml.objectives import GradientsSSE, L2Regularization
 from pysages.ml.optimizers import LevenbergMarquardt
-from pysages.ml.training import NNData, build_fitting_function, convolve
-from pysages.ml.utils import blackman_kernel, pack, unpack
+from pysages.ml.training import NNData, build_fitting_function
+from pysages.ml.utils import kernel_smoother, pack, unpack
 from pysages.utils import dispatch, only_or_identity
 
 
@@ -108,13 +107,7 @@ def _analyze(result: Result, strategy: GradientLearning, topology):
     optimizer = LevenbergMarquardt(loss=loss, max_iters=1000, reg=regularizer)
     fit = build_fitting_function(model, optimizer)
 
-    @vmap
-    def smooth(data, conv_dtype=np.float32):
-        data_dtype = data.dtype
-        boundary = "wrap" if grid.is_periodic else "edge"
-        kernel = np.asarray(blackman_kernel(grid.shape.size, 7), dtype=conv_dtype)
-        data = np.asarray(data, dtype=conv_dtype)
-        return np.asarray(convolve(data.T, kernel, boundary=boundary), dtype=data_dtype).T
+    smooth = kernel_smoother(grid.shape.size, 5, grid.is_periodic)
 
     @jit
     def pre_train(nn, data):

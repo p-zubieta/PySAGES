@@ -6,6 +6,7 @@ from typing import NamedTuple
 from jax import numpy as np
 from jax import random, vmap
 from jax.numpy.linalg import norm
+from jax.scipy import signal
 from jax.tree_util import PyTreeDef, tree_flatten
 from numpy import cumsum
 from plum import Dispatcher
@@ -14,6 +15,7 @@ from plum import Dispatcher
 dispatch = Dispatcher()
 
 
+# %% Models
 class ParametersLayout(NamedTuple):
     """
     Holds the information needed to pack flatten parameters of a
@@ -25,25 +27,6 @@ class ParametersLayout(NamedTuple):
     separators: list
 
 
-def rng_key(seed=0, n=2):
-    """
-    Returns a pseudo-randomly generated key, constructed by calling
-    `jax.random.PRNGKey(seed)` and then splitting it `n` times.
-    """
-    key = random.PRNGKey(seed)
-    for _ in range(n):
-        key, _ = random.split(key)
-    return key
-
-
-def prod(xs):
-    y = 1
-    for x in xs:
-        y *= x
-    return y
-
-
-# %% Models
 def unpack(params):
     """
     Returns the parameters of a `jax.example_libraries.stax.serial` model stacked
@@ -96,3 +79,53 @@ def blackman_kernel(dims, M):
     inds = np.stack(np.meshgrid(*(np.arange(1 - n, n, 2) for _ in range(dims))), axis=-1)
     kernel = apply(inds.reshape(-1, dims))
     return (kernel / kernel.sum()).reshape(*(n for _ in range(dims)))
+
+
+def kernel_smoother(ndims, size, periodic=False, kernel_dtype=np.float32):
+    assert size > 0
+    boundary = "wrap" if periodic else "edge"
+    kernel = np.asarray(blackman_kernel(ndims, size + 2), dtype=kernel_dtype)
+    return vmap(lambda data: smooth(data, kernel, boundary))
+
+
+def smooth(data, kernel, boundary):
+    data_dtype = data.dtype
+    data = np.asarray(data, dtype=kernel.dtype)
+    return np.asarray(convolve(data.T, kernel, boundary=boundary), dtype=data_dtype).T
+
+
+# %% Miscellanea
+def convolve(data, kernel, boundary):
+    """
+    Wrapper around `jax.scipy.signal.convolve`. It first pads the data,
+    depending on the size of the kernel, and chooses a padding mode depending
+    on whether the boundaries are periodic or not.
+    """
+    n = kernel.ndim
+    if n == 1:
+        padding = (kernel.size - 1) // 2
+    else:
+        padding = [tuple((s - 1) // 2 for _ in range(n)) for s in kernel.shape]
+
+    def pad(slice):
+        return np.pad(slice, padding, mode=boundary)
+
+    return signal.convolve(pad(data), kernel, mode="valid")
+
+
+def rng_key(seed=0, n=2):
+    """
+    Returns a pseudo-randomly generated key, constructed by calling
+    `jax.random.PRNGKey(seed)` and then splitting it `n` times.
+    """
+    key = random.PRNGKey(seed)
+    for _ in range(n):
+        key, _ = random.split(key)
+    return key
+
+
+def prod(xs):
+    y = 1
+    for x in xs:
+        y *= x
+    return y

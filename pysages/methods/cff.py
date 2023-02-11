@@ -29,8 +29,8 @@ from pysages.methods.utils import numpyfy_vals
 from pysages.ml.models import MLP
 from pysages.ml.objectives import L2Regularization, Sobolev1SSE
 from pysages.ml.optimizers import LevenbergMarquardt
-from pysages.ml.training import NNData, build_fitting_function, convolve, normalize
-from pysages.ml.utils import blackman_kernel, pack, unpack
+from pysages.ml.training import NNData, build_fitting_function, normalize
+from pysages.ml.utils import blackman_kernel, convolve, pack, unpack
 from pysages.utils import Bool, Int, JaxArray, dispatch, solve_pos_def
 
 # Aliases
