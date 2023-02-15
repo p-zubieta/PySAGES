@@ -130,7 +130,13 @@ def _analyze(result: Result, strategy: GradientLearning, topology):
         hist = np.expand_dims(state.hist, state.hist.ndim)
         F = state.Fsum / np.maximum(hist, 1)
 
-        # Scale the mean forces
+        # For periodic potentials the the integral of the mean force along each
+        # CV-axis should be zero. We account for this to improve our estimates.
+        if grid.is_periodic:
+            axes = tuple(range(F.ndim - 1))
+            F -= F.mean(axis=axes)
+
+        # Scale the mean forces before training
         s = np.abs(F).max()
         F = F / s
 
@@ -141,7 +147,7 @@ def _analyze(result: Result, strategy: GradientLearning, topology):
         def fes_fn(x):
             params = pack(nn.params, layout)
             A = nn.std * model.apply(params, x) + nn.mean
-            return A.max() - A
+            return -A
 
         return jit(fes_fn)
 
@@ -156,9 +162,10 @@ def _analyze(result: Result, strategy: GradientLearning, topology):
 
     for state in states:
         fes_fn = build_fes_fn(state)
+        fes = fes_fn(mesh)
         hists.append(state.hist)
         mean_forces.append(average_forces(state.hist, state.Fsum))
-        free_energies.append(fes_fn(mesh).reshape(grid.shape))
+        free_energies.append((fes - fes.min()).reshape(grid.shape))
         fes_fns.append(fes_fn)
 
     return {
