@@ -18,12 +18,13 @@ from pysages.utils import ToCPU, copy
 
 
 class Sampler:
-    def __init__(self, atoms, method_bundle):
-        snapshot, initialize, update = method_bundle
-        self.atoms = atoms
-        self.snapshot = snapshot
+    def __init__(self, atoms, method_bundle, callback: Callable):
+        initial_snapshot, initialize, method_update = method_bundle
         self.state = initialize()
-        self.update = update
+        self.atoms = atoms
+        self.callback = callback
+        self.snapshot = initial_snapshot
+        self.update = method_update
 
     def restore(self, prev_snapshot):
         atoms = self.atoms
@@ -88,7 +89,7 @@ def build_helpers(context, sampling_method):
     return helpers
 
 
-def wrap_step_fn(simulation, sampler, callback):
+def override_run_method(simulation, sampler):
     """
     Wraps the original step function of the `ase.md.MolecularDynamics`
     instance `simulation`, and injects calls to the sampling method's `update`
@@ -105,8 +106,8 @@ def wrap_step_fn(simulation, sampler, callback):
         else:
             forces = copy(sampler.snapshot.forces, ToCPU())
         simulation._step(forces=forces)
-        if callback:
-            callback(sampler.snapshot, sampler.state, number_of_steps())
+        if sampler.callback:
+            sampler.callback(sampler.snapshot, sampler.state, number_of_steps())
 
     simulation.step = wrapped_step
 
@@ -129,5 +130,5 @@ def bind(sampling_context: SamplingContext, callback: Callable, **kwargs):
     method_bundle = sampling_method.build(snapshot, helpers)
     sampler = Sampler(context.atoms, method_bundle)
     sampling_context.view = View((lambda: None))
-    sampling_context.run = wrap_step_fn(context, sampler, callback)
+    sampling_context.run = override_run_method(context, sampler)
     return sampler
