@@ -6,7 +6,7 @@ from typing import Callable, NamedTuple
 from jax import jit
 from jax import numpy as np
 
-from pysages.backends.core import ContextWrapper
+from pysages.backends.core import SamplingContext
 from pysages.backends.snapshot import (
     Box,
     HelperMethods,
@@ -14,7 +14,6 @@ from pysages.backends.snapshot import (
     SnapshotMethods,
     build_data_querier,
 )
-from pysages.methods import SamplingMethod
 from pysages.utils import ToCPU, copy
 
 
@@ -111,24 +110,24 @@ def wrap_step_fn(simulation, sampler, callback):
 
     simulation.step = wrapped_step
 
+    return simulation.run
+
 
 class View(NamedTuple):
     synchronize: Callable
 
 
-def bind(
-    wrapped_context: ContextWrapper, sampling_method: SamplingMethod, callback: Callable, **kwargs
-):
+def bind(sampling_context: SamplingContext, callback: Callable, **kwargs):
     """
     Entry point for the backend code, it gets called when the simulation
     context is wrapped within `pysages.run`.
     """
-    context = wrapped_context.context
+    context = sampling_context.context
+    sampling_method = sampling_context.method
     snapshot = take_snapshot(context)
-    helpers = build_helpers(wrapped_context.view, sampling_method)
+    helpers = build_helpers(sampling_context, sampling_method)
     method_bundle = sampling_method.build(snapshot, helpers)
     sampler = Sampler(context.atoms, method_bundle)
-    wrapped_context.view = View((lambda: None))
-    wrap_step_fn(context, sampler, callback)
-    wrapped_context.run = context.run
+    sampling_context.view = View((lambda: None))
+    sampling_context.run = wrap_step_fn(context, sampler, callback)
     return sampler
